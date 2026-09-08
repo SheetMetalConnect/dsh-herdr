@@ -74,6 +74,39 @@ alias dsxp='dsx --model pro --effort max'
 alias dsxl='dsx --provider local'
 ```
 
+## Defaults
+
+Every session — terminal, web and headless — starts from `~/.dsh/settings.yaml`:
+
+```yaml
+agent-default-model:
+  provider: deepseek-official
+  model: deepseek-v4-flash
+  reasoningEffort: high
+```
+
+`--model`, `--effort` and `/model` override it per session; this is what they fall back to.
+Set `deepseek-v4-pro` here if the hard work is your normal work, and keep an alias for the
+cheap lane rather than the other way round.
+
+A self-hosted endpoint is a `provider` here too. There is no per-session provider switch:
+the ACP server does not expose one, so the settings file is where that choice lives.
+
+**The harness refuses to boot on an invalid document**, and the error surfaces as a client
+that cannot start. YAML indentation is the usual cause — every key of a block sits at the
+same column, and a top-level key starts at column 0:
+
+```
+Error: settings-file: invalid document at ~/.dsh/settings.yaml: BAD_INDENT at line 3
+```
+
+## Modes and presets
+
+The web UI offers Standard, PTC, Minimal and Creator presets. They are not reachable from
+here: the ACP server registers nine methods and `session/set_mode` is not among them, and
+the bundle composes no presets by design. Choose a preset in the web UI, or give a preset
+its own dsh profile and point at that.
+
 ## Commands
 
 **Model and provider**
