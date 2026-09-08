@@ -4,6 +4,7 @@ import { readFileSync, writeFileSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createBridge } from './bridge.js'
 import { connect, modelOf, flattenOption, labelOfValue } from './session.js'
+import { readMcpServers } from './mcp.js'
 import {
   step, result, todos, answer, markTurnStart, footer, notice, warn, fail, tokens, seconds, bar,
   dim, bold, sky, startSpinner, stopSpinner, setSpinnerLabel,
@@ -390,7 +391,7 @@ async function reconnect(live) {
     /* already gone */
   }
   const link = await connect({ cwd: process.cwd(), handlers: live.handlers })
-  const fresh = await link.conn.newSession({ cwd: process.cwd(), mcpServers: [] })
+  const fresh = await link.conn.newSession({ cwd: process.cwd(), mcpServers: readMcpServers().servers })
   live.link = link
   state.sessionId = fresh.sessionId
   state.options = fresh.configOptions ?? state.options
@@ -464,7 +465,8 @@ async function main() {
     process.exit(1)
   }
 
-  const session = await link.conn.newSession({ cwd, mcpServers: [] })
+  const mcp = readMcpServers({ cwd })
+  const session = await link.conn.newSession({ cwd, mcpServers: mcp.servers })
   state.sessionId = session.sessionId
   state.options = session.configOptions ?? []
   const modelOpt = state.options.find((o) => o.id === 'model')
@@ -499,6 +501,13 @@ async function main() {
   process.stdout.write(
     `\n ${sky('◆')} ${bold(repo)}${branch ? dim(` ${branch}`) : ''}${space && space !== repo ? dim(`  in ${space}`) : ''}  ${dim('·')}  ${sky(state.model)}${state.effort ? dim(` (${state.effort.toLowerCase()})`) : ''}\n`,
   )
+  if (mcp.servers.length || mcp.skipped.length) {
+    const loaded = mcp.servers.map((m) => m.name).join(' ')
+    process.stdout.write(`   ${dim('mcp')}  ${dim(loaded || 'none')}\n`)
+    if (mcp.skipped.length) {
+      process.stdout.write(`        ${dim(`${mcp.skipped.join(' ')} need OAuth — not portable`)}\n`)
+    }
+  }
   process.stdout.write(
     `   ${dim(`session ${state.sessionId.slice(0, 8)}`)}  ${dim('·')}  ${dim('/help for commands')}\n`,
   )
@@ -633,7 +642,7 @@ async function main() {
       const match = (herdrSpaces() ?? []).find((w) => w.cwd && w.label.toLowerCase().startsWith(wanted))
       if (!match) warn(`no herdr workspace matching "${wanted}" with a known path`)
       else {
-        const moved = await link.conn.newSession({ cwd: match.cwd, mcpServers: [] })
+        const moved = await link.conn.newSession({ cwd: match.cwd, mcpServers: readMcpServers({ cwd: match.cwd }).servers })
         state.sessionId = moved.sessionId
         state.used = 0
         process.chdir(match.cwd)
@@ -668,7 +677,7 @@ async function main() {
       return true
     }
     if (cmd === 'new') {
-      const fresh = await link.conn.newSession({ cwd, mcpServers: [] })
+      const fresh = await link.conn.newSession({ cwd, mcpServers: mcp.servers })
       state.sessionId = fresh.sessionId
       state.used = 0
       state.todos = []
