@@ -122,24 +122,43 @@ function cells(line) {
 function renderTable(rows, out) {
   const parsed = rows.filter((r) => !isTableRule(r)).map(cells)
   const columns = Math.max(...parsed.map((r) => r.length))
-  const widths = Array.from({ length: columns }, (_, i) =>
+  const available = (process.stdout.columns || 100) - WRAP_INDENT.length - (columns - 1) * 3
+
+  // Give every column what its widest cell needs, then take the overshoot off
+  // the widest columns until it fits. Cells wrap inside their column instead of
+  // running past the edge and dropping the tail to column 0.
+  const wanted = Array.from({ length: columns }, (_, i) =>
     Math.max(...parsed.map((r) => visibleLength(inline(r[i] ?? '')))),
   )
-  const cap = Math.max(12, Math.floor(((process.stdout.columns || 100) - WRAP_INDENT.length - columns * 3) / columns))
-  const draw = (row, styler) =>
-    row
-      .map((c, i) => {
-        const text = styler(inline(c ?? ''))
-        const pad = Math.max(0, Math.min(widths[i], cap) - visibleLength(text))
-        return text + ' '.repeat(pad)
+  const widths = [...wanted]
+  let over = widths.reduce((a, b) => a + b, 0) - available
+  while (over > 0 && Math.max(...widths) > 8) {
+    const widest = widths.indexOf(Math.max(...widths))
+    widths[widest] -= 1
+    over -= 1
+  }
+
+  const sep = dim(' │ ')
+  // Once cells wrap, consecutive rows read as one block; a blank line between
+  // them is the cheapest way to keep the rows apart.
+  const anyWrapped = parsed.some((row) =>
+    widths.some((w, i) => visibleLength(inline(row[i] ?? '')) > w),
+  )
+  parsed.forEach((row, index) => {
+    const style = index === 0 ? (t) => bold(sky(t)) : (t) => t
+    const wrapped = widths.map((w, i) => wrap(style(inline(row[i] ?? '')), w))
+    const height = Math.max(...wrapped.map((c) => c.length))
+    for (let n = 0; n < height; n++) {
+      const cellsOut = wrapped.map((c, i) => {
+        const text = c[n] ?? ''
+        return text + ' '.repeat(Math.max(0, widths[i] - visibleLength(text)))
       })
-      .join(dim('  │  '))
-  parsed.forEach((row, i) => {
-    out.push(`${WRAP_INDENT}${draw(row, i === 0 ? (t) => bold(sky(t)) : (t) => t)}`)
-    if (i === 0) {
-      out.push(
-        `${WRAP_INDENT}${muted(widths.map((w) => '─'.repeat(Math.min(w, cap))).join('──┼──'))}`,
-      )
+      out.push(`${WRAP_INDENT}${cellsOut.join(sep).trimEnd()}`)
+    }
+    if (index === 0) {
+      out.push(`${WRAP_INDENT}${muted(widths.map((w) => '─'.repeat(w)).join('─┼─'))}`)
+    } else if (anyWrapped && index < parsed.length - 1) {
+      out.push('')
     }
   })
 }
@@ -289,13 +308,14 @@ export function result(key, text, extra = '') {
 
 export function tokens(used, size) {
   if (!used) return ''
+  const pct = size ? ` (${Math.round((used / size) * 100)}%)` : ''
   const k = (n) =>
     n >= 1_000_000
       ? `${(n / 1_000_000).toFixed(n % 1_000_000 ? 1 : 0)}M`
       : n >= 1000
         ? `${(n / 1000).toFixed(1)}K`
         : String(n)
-  return size ? `${k(used)} / ${k(size)} tokens` : `${k(used)} tokens`
+  return size ? `${k(used)} / ${k(size)}${pct}` : `${k(used)} tokens`
 }
 
 export function seconds(ms) {
