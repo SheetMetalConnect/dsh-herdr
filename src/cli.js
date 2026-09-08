@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 import readline from 'node:readline'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createBridge } from './bridge.js'
 import { connect, modelOf } from './session.js'
 import {
-  step, result, todos, answer, footer, notice, warn, fail, tokens, seconds, bar,
+  step, result, todos, answer, markTurnStart, footer, notice, warn, fail, tokens, seconds, bar,
   dim, bold, sky, startSpinner, stopSpinner, setSpinnerLabel,
 } from './render.js'
 const cyan = sky
 
-const bridge = createBridge({ agent: 'dsh' })
+const bridge = createBridge({ agent: 'DeepSeek', source: 'custom:dsh' })
 
 const state = {
   sessionId: undefined,
@@ -29,6 +30,7 @@ const HELP = `  /web        open the harness web UI on this session
   /space <n>  start a session in one of them
   /sessions   list sessions in this workspace
   /resume <id>  continue an earlier session
+  /queue      what is waiting to run
   /todos      the current to-do list
   /trace      every tool call of the last turn, with its output
   /verbose    toggle full reasoning
@@ -107,11 +109,12 @@ function render(update) {
 // dsh reports every tool with kind "other", so the tool name lives in `title`
 // and everything worth showing lives in `rawInput`.
 const DETAIL = {
-  read: (i) => i.file_path ?? i.path,
-  write: (i) => i.file_path ?? i.path,
-  edit: (i) => i.file_path ?? i.path,
+  read: (i) => relative(i.file_path ?? i.path),
+  write: (i) => relative(i.file_path ?? i.path),
+  edit: (i) => relative(i.file_path ?? i.path),
   glob: (i) => i.pattern,
   grep: (i) => [i.pattern, i.path && basename(i.path)].filter(Boolean).join('  '),
+  ls: (i) => relative(i.path),
   bash: (i) => i.description ?? i.command,
   subagent: (i) => i.description ?? oneLineTask(i.prompt),
   fetch: (i) => i.url,
@@ -126,6 +129,14 @@ const KEY = {
 
 function basename(p) {
   return String(p).split('/').pop()
+}
+
+// Absolute paths eat the line and say nothing: inside a repo the interesting
+// part is always the tail.
+function relative(p) {
+  const path = String(p ?? '')
+  const root = process.cwd()
+  return path.startsWith(root + '/') ? path.slice(root.length + 1) : path
 }
 
 function oneLineTask(prompt) {
@@ -236,11 +247,38 @@ function herdrSpaces() {
   }))
 }
 
-async function openWeb() {
-  if (state.web) {
-    notice(state.web)
-    return
+const WEB_CACHE = `${process.env.DSH_HOME || `${process.env.HOME}/.dsh`}/.dsx-web`
+
+// The token is only printed when the server starts, so a second dsx would have
+// no way to reach an already-running UI. Cache it next to the harness home at
+// 0600 — same posture as the credential file, and never inside a repo.
+function cachedWebUrl() {
+  try {
+    const url = readFileSync(WEB_CACHE, 'utf8').trim()
+    return url.startsWith('http://127.0.0.1:') ? url : undefined
+  } catch {
+    return undefined
   }
+}
+
+async function alive(url) {
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(1500) })
+    return res.status < 400
+  } catch {
+    return false
+  }
+}
+
+async function ensureWeb({ quiet = false } = {}) {
+  if (state.web) return state.web
+
+  const cached = cachedWebUrl()
+  if (cached && (await alive(cached))) {
+    state.web = cached
+    return cached
+  }
+
   const child = spawn('dsh', ['web', '--no-open'], {
     stdio: ['ignore', 'pipe', 'ignore'],
     env: process.env,
@@ -257,10 +295,25 @@ async function openWeb() {
       }
     })
   })
-  if (!url) return warn('web UI did not report a URL in time')
+  if (!url) {
+    if (!quiet) warn('web UI did not report a URL in time')
+    return undefined
+  }
+  try {
+    writeFileSync(WEB_CACHE, `${url}\n`, { mode: 0o600 })
+  } catch {
+    /* cache is a convenience, not a requirement */
+  }
   state.web = url
-  notice(url)
-  notice('same $DSH_HOME, so this session is in that list')
+  return url
+}
+
+function gitBranch(cwd) {
+  const out = spawnSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], {
+    encoding: 'utf8',
+    shell: false,
+  })
+  return out.status === 0 ? out.stdout.trim() : undefined
 }
 
 function parseArgv(argv) {
@@ -280,6 +333,7 @@ async function runTurn(link, input) {
   state.calls.clear()
   state.trace = []
   state.busy = true
+  markTurnStart()
   setSpinnerLabel('thinking')
   startSpinner('thinking')
   bridge.report('working', { message: input, sessionId: state.sessionId }).catch(() => {})
@@ -298,7 +352,13 @@ async function runTurn(link, input) {
     seconds(Date.now() - started),
     result.stopReason !== 'end_turn' ? result.stopReason : '',
   ])
-  bridge.report('idle', { message: state.model, sessionId: state.sessionId }).catch(() => {})
+  const closing = result.error || result.stopReason === 'refusal' ? 'blocked' : 'idle'
+  bridge
+    .report(closing, {
+      message: result.error ?? state.model,
+      sessionId: state.sessionId,
+    })
+    .catch(() => {})
   return result
 }
 
@@ -339,12 +399,26 @@ async function main() {
     process.exit(0)
   }
 
+  const repo = cwd.split('/').pop()
+  const branch = gitBranch(cwd)
   process.stdout.write(
-    `${bold('dsh')} ${dim(link.info?.agentInfo?.version ?? '')} ${dim('·')} ${state.model} ${dim('·')} ${dim(cwd)}\n`,
+    `\n ${sky('◆')} ${bold(repo)}${branch ? dim(` ${branch}`) : ''}  ${dim('·')}  ${sky(state.model)}\n`,
   )
-  process.stdout.write(dim('  /help for commands\n'))
+  if (!process.env.DSX_NO_WEB) {
+    const url = await ensureWeb({ quiet: true })
+    if (url) process.stdout.write(`   ${dim('web')}  ${dim(url)}\n`)
+  }
+  process.stdout.write(`   ${dim('/help for commands')}\n`)
 
+  const queue = []
   let cancelling = false
+  let running = false
+
+  const showPrompt = () => {
+    rl.setPrompt(`\n${sky('›')} `)
+    rl.prompt()
+  }
+
   rl.on('SIGINT', () => {
     if (state.busy && !cancelling) {
       cancelling = true
@@ -352,116 +426,151 @@ async function main() {
       warn('cancelling turn')
       return
     }
+    if (queue.length) {
+      queue.length = 0
+      warn('queue cleared')
+      showPrompt()
+      return
+    }
     rl.close()
   })
 
-  for (;;) {
-    const raw = await question(rl, `\n${cyan('›')} `)
-    if (raw === null) break
-    const input = raw.trim()
-    if (!input) continue
+  const handle = async (input) => {
+    if (input.startsWith('/')) return command(input)
+    cancelling = false
+    await runTurn(link, input)
+    return true
+  }
 
-    if (input.startsWith('/')) {
-      const [cmd, ...rest] = input.slice(1).split(/\s+/)
-      if (cmd === 'quit' || cmd === 'q') break
-      if (cmd === 'help') {
-        process.stdout.write(`${HELP}\n`)
-        continue
-      }
-      if (cmd === 'verbose') {
-        state.verbose = !state.verbose
-        notice(`reasoning ${state.verbose ? 'shown' : 'folded'}`)
-        continue
-      }
-      if (cmd === 'todos') {
-        if (!state.todos.length) warn('no to-do list in this session yet')
-        else todos(state.todos)
-        continue
-      }
-      if (cmd === 'spaces') {
-        const spaces = herdrSpaces()
-        if (!spaces) {
-          warn('no herdr server to read workspaces from')
-          continue
+  const command = async (input) => {
+    const [cmd, ...rest] = input.slice(1).split(/\s+/)
+    if (cmd === 'quit' || cmd === 'q') {
+      rl.close()
+      return false
+    }
+    if (cmd === 'help') {
+      process.stdout.write(`${HELP}\n`)
+      return true
+    }
+    if (cmd === 'verbose') {
+      state.verbose = !state.verbose
+      notice(`reasoning ${state.verbose ? 'shown' : 'folded'}`)
+      return true
+    }
+    if (cmd === 'queue') {
+      if (!queue.length) warn('nothing queued')
+      else queue.forEach((q, i) => step('tool', `${i + 1}. ${q}`))
+      return true
+    }
+    if (cmd === 'todos') {
+      if (!state.todos.length) warn('no to-do list in this session yet')
+      else todos(state.todos)
+      return true
+    }
+    if (cmd === 'trace') {
+      if (!state.trace.length) warn('no tool calls in the last turn')
+      else
+        for (const t of state.trace) {
+          step(t.key, t.detail)
+          if (t.output) result(t.key, t.output, seconds(t.took))
         }
+      return true
+    }
+    if (cmd === 'spaces') {
+      const spaces = herdrSpaces()
+      if (!spaces) warn('no herdr server to read workspaces from')
+      else {
         for (const w of spaces) {
           step(w.status === 'working' ? 'agent' : 'tool', `${w.label}${w.cwd ? dim(`  ${w.cwd}`) : ''}`)
         }
         notice('/space <name> starts a session there')
-        continue
       }
-      if (cmd === 'space') {
-        const wanted = rest.join(' ').toLowerCase()
-        const match = (herdrSpaces() ?? []).find(
-          (w) => w.cwd && w.label.toLowerCase().startsWith(wanted),
-        )
-        if (!match) {
-          warn(`no herdr workspace matching "${wanted}" with a known path`)
-          continue
-        }
+      return true
+    }
+    if (cmd === 'space') {
+      const wanted = rest.join(' ').toLowerCase()
+      const match = (herdrSpaces() ?? []).find((w) => w.cwd && w.label.toLowerCase().startsWith(wanted))
+      if (!match) warn(`no herdr workspace matching "${wanted}" with a known path`)
+      else {
         const moved = await link.conn.newSession({ cwd: match.cwd, mcpServers: [] })
         state.sessionId = moved.sessionId
         state.used = 0
         process.chdir(match.cwd)
         notice(`${match.label}  ${match.cwd}`)
-        continue
       }
-      if (cmd === 'trace') {
-        if (!state.trace.length) {
-          warn('no tool calls in the last turn')
-          continue
-        }
-        for (const t of state.trace) {
-          step(t.key, t.detail)
-          if (t.output) result(t.key, t.output, seconds(t.took))
-        }
-        continue
-      }
-      if (cmd === 'web') {
-        await openWeb()
-        continue
-      }
-      if (cmd === 'sessions') {
-        const list = await link.conn.listSessions({}).catch((e) => ({ error: e.message }))
-        for (const s of list.sessions ?? []) {
-          step(s.sessionId === state.sessionId ? 'current' : 'session', `${s.sessionId}  ${s.title ?? ''}`)
-        }
-        if (list.error) warn(list.error)
-        continue
-      }
-      if (cmd === 'resume') {
-        const id = rest[0]
-        if (!id) {
-          warn('usage: /resume <session-id>')
-          continue
-        }
-        const resumed = await link.conn.resumeSession({ sessionId: id, cwd }).catch((e) => ({ error: e.message }))
-        if (resumed.error) {
-          warn(resumed.error)
-          continue
-        }
-        state.sessionId = id
-        notice(`resumed ${id}`)
-        continue
-      }
-      if (cmd === 'new') {
-        const fresh = await link.conn.newSession({ cwd, mcpServers: [] })
-        state.sessionId = fresh.sessionId
-        state.used = 0
-        notice(`new session ${fresh.sessionId}`)
-        continue
-      }
-      warn(`unknown command: /${cmd}`)
-      continue
+      return true
     }
-
-    cancelling = false
-    await runTurn(link, input)
+    if (cmd === 'web') {
+      const url = await ensureWeb()
+      if (url) notice(url)
+      return true
+    }
+    if (cmd === 'sessions') {
+      const list = await link.conn.listSessions({}).catch((e) => ({ error: e.message }))
+      for (const item of list.sessions ?? []) {
+        step(item.sessionId === state.sessionId ? 'agent' : 'tool', `${item.sessionId}  ${item.title ?? ''}`)
+      }
+      if (list.error) warn(list.error)
+      return true
+    }
+    if (cmd === 'resume') {
+      const id = rest[0]
+      if (!id) warn('usage: /resume <session-id>')
+      else {
+        const resumed = await link.conn.resumeSession({ sessionId: id, cwd }).catch((e) => ({ error: e.message }))
+        if (resumed.error) warn(resumed.error)
+        else {
+          state.sessionId = id
+          notice(`resumed ${id}`)
+        }
+      }
+      return true
+    }
+    if (cmd === 'new') {
+      const fresh = await link.conn.newSession({ cwd, mcpServers: [] })
+      state.sessionId = fresh.sessionId
+      state.used = 0
+      state.todos = []
+      notice(`new session ${fresh.sessionId}`)
+      return true
+    }
+    warn(`unknown command: /${cmd}`)
+    return true
   }
 
+  // Anything typed during a turn is queued rather than lost, and drains in
+  // order once the turn ends — the whole point of a long-running agent is that
+  // you keep thinking while it works.
+  const drain = async () => {
+    if (running) return
+    running = true
+    while (queue.length) {
+      const next = queue.shift()
+      const keepGoing = await handle(next)
+      if (keepGoing === false) {
+        running = false
+        return
+      }
+    }
+    running = false
+    showPrompt()
+  }
+
+  rl.on('line', (raw) => {
+    const input = raw.trim()
+    if (!input) {
+      if (!running) showPrompt()
+      return
+    }
+    queue.push(input)
+    if (running) notice(`queued (${queue.length})`)
+    else void drain()
+  })
+
+  showPrompt()
+  await new Promise((resolve) => rl.once('close', resolve))
   await bridge.release().catch(() => {})
   link.close()
-  rl.close()
   process.exit(0)
 }
 

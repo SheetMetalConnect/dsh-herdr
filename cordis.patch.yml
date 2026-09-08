@@ -8,4 +8,4 @@
     - id: herdr-bridge
       name: 'herdr-bridge/adapters/dsh'
       config:
-        agent: dsh
+        agent: DeepSeek

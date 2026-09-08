@@ -23,7 +23,7 @@ const TRANSITIONS = [
 
 export function apply(ctx, config = {}) {
   const bridge = createBridge({
-    agent: config.agent || 'dsh',
+    agent: config.agent || 'DeepSeek',
     source: config.source,
   })
   if (!bridge.enabled) return

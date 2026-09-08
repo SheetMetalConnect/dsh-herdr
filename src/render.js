@@ -81,10 +81,22 @@ export function setSpinnerLabel(text) {
   spinnerLabel = text
 }
 
+// Elapsed seconds in the gutter turn every line into a timeline: you can see
+// where the run actually spent itself instead of guessing from the total.
+let turnStart = Date.now()
+export function markTurnStart() {
+  turnStart = Date.now()
+}
+
+function gutter() {
+  const secs = Math.floor((Date.now() - turnStart) / 1000)
+  return muted(`${String(Math.floor(secs / 60)).padStart(2, '0')}:${String(secs % 60).padStart(2, '0')}`)
+}
+
 export function step(key, text = '', depth = 0) {
   const [icon, colour, label] = TOOLS[key] ?? TOOLS.tool
-  const indent = '  '.repeat(depth + 1)
-  line(`${indent}${colour(icon)} ${colour(label.padEnd(LABEL_WIDTH))} ${dim(oneLine(text))}\n`)
+  const indent = '  '.repeat(depth)
+  line(`${gutter()} ${indent}${colour(icon)} ${colour(label.padEnd(LABEL_WIDTH))} ${dim(oneLine(text))}\n`)
 }
 
 export function oneLine(text, max = Math.max(40, (process.stdout.columns || 100) - 20)) {
@@ -95,8 +107,73 @@ export function oneLine(text, max = Math.max(40, (process.stdout.columns || 100)
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat
 }
 
+const WRAP_INDENT = '      '
+
+// Wraps to the pane and renders the bits of markdown the harness actually
+// emits, so an answer reads as prose instead of a wall with literal asterisks.
 export function answer(text) {
-  line(`\n${text.trimEnd()}\n`)
+  const width = Math.max(50, (process.stdout.columns || 100) - WRAP_INDENT.length - 2)
+  const out = []
+  let inFence = false
+  for (const raw of text.trimEnd().split('\n')) {
+    // Inside a fence every space is meaningful, so it goes through untouched.
+    if (/^\s*```/.test(raw)) {
+      inFence = !inFence
+      out.push(`${WRAP_INDENT}${muted(raw.trim())}`)
+      continue
+    }
+    if (inFence) {
+      out.push(`${WRAP_INDENT}${peach(raw)}`)
+      continue
+    }
+    const heading = raw.match(/^(#{1,6})\s+(.*)$/)
+    if (heading) {
+      out.push(`${WRAP_INDENT}${bold(sky(heading[2]))}`)
+      continue
+    }
+    const bullet = raw.match(/^(\s*)([-*]|\d+\.)\s+(.*)$/)
+    const body = bullet ? bullet[3] : raw
+    const lead = bullet ? `${WRAP_INDENT}${bullet[1]}${sky('•')} ` : WRAP_INDENT
+    const cont = bullet ? `${WRAP_INDENT}${bullet[1]}  ` : WRAP_INDENT
+    if (!body.trim()) {
+      out.push('')
+      continue
+    }
+    for (const [i, chunk] of wrap(inline(body), width).entries()) {
+      out.push(`${i === 0 ? lead : cont}${chunk}`)
+    }
+  }
+  line(`\n${out.join('\n')}\n`)
+}
+
+function inline(text) {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, (_, t) => bold(t))
+    .replace(/`([^`]+)`/g, (_, t) => peach(t))
+}
+
+// Width has to be measured on the visible text, not the bytes, or every styled
+// word would count its escape codes as characters and wrap far too early.
+function visibleLength(s) {
+  // eslint-disable-next-line no-control-regex
+  return s.replace(/\u001b\[[0-9;]*m/g, '').length
+}
+
+function wrap(text, width) {
+  const words = text.split(/\s+/).filter(Boolean)
+  const lines = []
+  let current = ''
+  for (const word of words) {
+    const candidate = current ? `${current} ${word}` : word
+    if (visibleLength(candidate) > width && current) {
+      lines.push(current)
+      current = word
+    } else {
+      current = candidate
+    }
+  }
+  if (current) lines.push(current)
+  return lines.length ? lines : ['']
 }
 
 export function footer(parts) {
@@ -140,18 +217,18 @@ export function todos(items) {
     .filter((k) => counts[k])
     .map((k) => `${counts[k]} ${k.replace('_', ' ')}`)
     .join(', ')
-  line(`  ${mauve('☰')} ${mauve('To-dos'.padEnd(LABEL_WIDTH))} ${dim(summary)}\n`)
+  line(`${gutter()} ${mauve('☰')} ${mauve('To-dos'.padEnd(LABEL_WIDTH))} ${dim(summary)}\n`)
   for (const t of items) {
     const mark = (TODO_MARK[t.status] ?? TODO_MARK.pending)()
     const text = t.status === 'completed' ? muted(oneLine(t.content)) : dim(oneLine(t.content))
-    line(`    ${mark} ${text}\n`)
+    line(`      ${mark} ${text}\n`)
   }
 }
 
 export function result(key, text, extra = '') {
   const [, colour] = TOOLS[key] ?? TOOLS.tool
   const tail = extra ? dim(`  ${extra}`) : ''
-  line(`    ${colour('└')} ${dim(oneLine(text))}${tail}\n`)
+  line(`      ${colour('└')} ${dim(oneLine(text))}${tail}\n`)
 }
 
 export function tokens(used, size) {
