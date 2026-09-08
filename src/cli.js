@@ -415,6 +415,7 @@ async function main() {
   let running = false
 
   const showPrompt = () => {
+    if (inputClosed || rl.closed) return
     rl.setPrompt(`\n${sky('›')} `)
     rl.prompt()
   }
