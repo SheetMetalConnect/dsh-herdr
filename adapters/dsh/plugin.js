@@ -14,10 +14,15 @@
 //         name: 'herdr-bridge/adapters/dsh'
 //         config: { agent: dsh }
 //
-// dsh's event surface is still moving between release candidates. Rather than
-// pin one shape, every known lifecycle event is subscribed defensively: an
-// event that does not exist in the running version simply never fires, and the
-// pane falls back to the state its neighbours reported.
+// Event names below were read out of dsh 0.1.2-rc.1 rather than guessed, but
+// the surface still moves between release candidates, so every subscription is
+// defensive: an event that does not exist in the version you run simply never
+// fires and nothing throws.
+//
+// One ordering caveat, visible in a single-shot `--profile headless` run: the
+// job can begin before this plugin is mounted, so the opening `turn/start` is
+// already past and the pane only sees the closing `turn/end`. Any session with
+// more than one turn reports normally.
 
 const { createBridge } = require('../../src/bridge.js')
 
@@ -25,18 +30,26 @@ const name = 'herdr-bridge'
 
 // event name -> what the pane should say while it is happening
 const TRANSITIONS = [
+  ['agent/session-start', 'working'],
   ['turn/start', 'working'],
   ['step/start', 'working'],
-  ['tools/result', 'working'],
   ['step/end', 'working'],
+  ['tools/result', 'working'],
+  ['subagent/start', 'working'],
+  ['subagent/end', 'working'],
+  // A decision came back, so the run is moving again.
+  ['approval/decided', 'working'],
+
   ['turn/end', 'idle'],
-  ['agent/turn-stopping', 'idle'],
-  ['session/idle', 'idle'],
-  // A question or an approval prompt is the one state worth a notification:
-  // the run has stopped and it is waiting on a person.
-  ['user/question', 'blocked'],
-  ['user/approval-request', 'blocked'],
-  ['agent/request-error', 'blocked'],
+  ['session/disposed', 'idle'],
+  ['agent/disposed', 'idle'],
+
+  // The only states worth a notification: the run has stopped and it is
+  // waiting on a person. Report nothing else as blocked or the notification
+  // stops meaning anything.
+  ['approval/request', 'blocked'],
+  ['user-questions/request', 'blocked'],
+  ['agent/error', 'blocked'],
 ]
 
 function apply(ctx, config = {}) {
