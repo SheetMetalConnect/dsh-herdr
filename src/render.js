@@ -264,12 +264,22 @@ export function todos(items) {
     .filter((k) => counts[k])
     .map((k) => `${counts[k]} ${k.replace('_', ' ')}`)
     .join(', ')
-  line(`${gutter()} ${mauve('☰')} ${mauve('To-dos'.padEnd(LABEL_WIDTH))} ${dim(summary)}\n`)
+  // The plan is the one block worth interrupting the log for, so it gets air
+  // around it and the live item is the only line at full brightness.
+  line('\n')
+  line(`${gutter()} ${mauve('\u2630')} ${bold(mauve('To-dos'.padEnd(LABEL_WIDTH)))} ${dim(summary)}\n`)
   for (const t of items) {
     const mark = (TODO_MARK[t.status] ?? TODO_MARK.pending)()
-    const text = t.status === 'completed' ? muted(oneLine(t.content)) : dim(oneLine(t.content))
-    line(`      ${mark} ${text}\n`)
+    const text = oneLine(t.content)
+    const body =
+      t.status === 'in_progress'
+        ? bold(sky(text))
+        : t.status === 'completed'
+          ? muted(text)
+          : dim(text)
+    line(`      ${mauve('\u2502')}  ${mark} ${body}\n`)
   }
+  line('\n')
 }
 
 export function result(key, text, extra = '') {
