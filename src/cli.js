@@ -32,8 +32,6 @@ const HELP = `  /web        open the harness web UI on this session
   /space <n>  start a session in one of them
   /sessions   list sessions in this workspace
   /resume <id>  continue an earlier session
-  /providers  providers the harness knows, including your own endpoint
-  /provider   select one, or "off <id>" to disable it
   /model      switch model, any provider the harness offers
   /effort     reasoning effort: off, low, high, max
   /queue      what is waiting to run
@@ -353,7 +351,6 @@ function parseArgv(argv) {
     else if (arg === '-v' || arg === '--verbose') out.verbose = true
     else if (arg === '-m' || arg === '--model') out.model = argv[++i]
     else if (arg === '-e' || arg === '--effort') out.effort = argv[++i]
-    else if (arg === '--provider') out.provider = argv[++i]
     else if (out.prompt === undefined) out.prompt = arg
   }
   return out
@@ -441,12 +438,6 @@ async function main() {
   state.model = modelOpt ? labelOfValue(modelOpt, modelOpt.currentValue) : (modelOf(session) ?? 'deepseek')
   state.effort = effortOpt ? labelOfValue(effortOpt, effortOpt.currentValue) : undefined
 
-  if (args.provider) {
-    const res = await link.conn
-      .unstable_setProvider({ providerId: args.provider })
-      .catch((e) => ({ error: e.message }))
-    if (res?.error) warn(res.error)
-  }
   if (args.model) {
     const applied = await chooseOption(link, 'model', args.model)
     if (applied.error) warn(applied.error)
@@ -569,70 +560,6 @@ async function main() {
       const applied = await chooseOption(link, option.id, picked)
       if (applied.error) warn(applied.error)
       else notice(`${option.name}: ${applied.name}`)
-      return true
-    }
-    if (cmd === 'providers') {
-      const list = await link.conn.unstable_listProviders({}).catch((e) => ({ error: e.message }))
-      if (list.error) {
-        warn(list.error)
-        return true
-      }
-      const providers = list.providers ?? []
-      if (!providers.length) warn('the harness reports no providers')
-      for (const pr of providers) {
-        step(pr.enabled === false ? 'tool' : 'agent', `${pr.id ?? pr.name}${pr.name && pr.id ? dim(`  ${pr.name}`) : ''}`)
-      }
-      notice('/provider <id> selects one, /provider off <id> disables it')
-      return true
-    }
-    if (cmd === 'provider') {
-      const off = rest[0] === 'off'
-      const id = (off ? rest.slice(1) : rest).join(' ')
-      if (!id) {
-        warn('usage: /provider <id>  or  /provider off <id>')
-        return true
-      }
-      const call = off
-        ? link.conn.unstable_disableProvider({ providerId: id })
-        : link.conn.unstable_setProvider({ providerId: id })
-      const res = await call.catch((e) => ({ error: e.message }))
-      if (res?.error) warn(res.error)
-      else notice(`provider ${off ? 'disabled' : 'selected'}: ${id}`)
-      return true
-    }
-    if (cmd === 'mode') {
-      const mode = rest.join(' ')
-      if (!mode) {
-        warn('usage: /mode <name>')
-        return true
-      }
-      const res = await link.conn
-        .setSessionMode({ sessionId: state.sessionId, modeId: mode })
-        .catch((e) => ({ error: e.message }))
-      if (res?.error) warn(res.error)
-      else notice(`mode: ${mode}`)
-      return true
-    }
-    if (cmd === 'fork') {
-      const res = await link.conn
-        .unstable_forkSession({ sessionId: state.sessionId, cwd })
-        .catch((e) => ({ error: e.message }))
-      if (res?.error) warn(res.error)
-      else {
-        state.sessionId = res.sessionId
-        notice(`forked to ${res.sessionId}`)
-      }
-      return true
-    }
-    if (cmd === 'delete') {
-      const id = rest[0]
-      if (!id) {
-        warn('usage: /delete <session-id>')
-        return true
-      }
-      const res = await link.conn.deleteSession({ sessionId: id }).catch((e) => ({ error: e.message }))
-      if (res?.error) warn(res.error)
-      else notice(`deleted ${id}`)
       return true
     }
     if (cmd === 'queue') {
