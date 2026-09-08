@@ -111,11 +111,54 @@ const WRAP_INDENT = '      '
 
 // Wraps to the pane and renders the bits of markdown the harness actually
 // emits, so an answer reads as prose instead of a wall with literal asterisks.
+const isTableRow = (line) => /^\s*\|.*\|\s*$/.test(line)
+const isTableRule = (line) => /^\s*\|[\s:|-]+\|\s*$/.test(line)
+
+function cells(line) {
+  return line.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim())
+}
+
+// A markdown table printed as raw pipes is unreadable at terminal width, and
+// the model reaches for one whenever it compares things.
+function renderTable(rows, out) {
+  const parsed = rows.filter((r) => !isTableRule(r)).map(cells)
+  const columns = Math.max(...parsed.map((r) => r.length))
+  const widths = Array.from({ length: columns }, (_, i) =>
+    Math.max(...parsed.map((r) => visibleLength(inline(r[i] ?? '')))),
+  )
+  const cap = Math.max(12, Math.floor(((process.stdout.columns || 100) - WRAP_INDENT.length - columns * 3) / columns))
+  const draw = (row, styler) =>
+    row
+      .map((c, i) => {
+        const text = styler(inline(c ?? ''))
+        const pad = Math.max(0, Math.min(widths[i], cap) - visibleLength(text))
+        return text + ' '.repeat(pad)
+      })
+      .join(dim('  │  '))
+  parsed.forEach((row, i) => {
+    out.push(`${WRAP_INDENT}${draw(row, i === 0 ? (t) => bold(sky(t)) : (t) => t)}`)
+    if (i === 0) {
+      out.push(
+        `${WRAP_INDENT}${muted(widths.map((w) => '─'.repeat(Math.min(w, cap))).join('──┼──'))}`,
+      )
+    }
+  })
+}
+
 export function answer(text) {
-  const width = Math.max(50, (process.stdout.columns || 100) - WRAP_INDENT.length - 2)
+  const width = Math.max(40, (process.stdout.columns || 100) - WRAP_INDENT.length - 2)
   const out = []
   let inFence = false
-  for (const raw of text.trimEnd().split('\n')) {
+  const lines = text.trimEnd().split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const raw = lines[i]
+    if (!inFence && isTableRow(raw)) {
+      const rows = []
+      while (i < lines.length && isTableRow(lines[i])) rows.push(lines[i++])
+      i--
+      renderTable(rows, out)
+      continue
+    }
     // Inside a fence every space is meaningful, so it goes through untouched.
     if (/^\s*```/.test(raw)) {
       inFence = !inFence
@@ -139,8 +182,12 @@ export function answer(text) {
       out.push('')
       continue
     }
-    for (const [i, chunk] of wrap(inline(body), width).entries()) {
-      out.push(`${i === 0 ? lead : cont}${chunk}`)
+    // Nested bullets carry their own indent, so the usable width shrinks with
+    // depth; measuring against the flat width lets the terminal wrap instead,
+    // which drops the tail to column 0 mid-word.
+    const usable = Math.max(24, width - visibleLength(cont) + WRAP_INDENT.length)
+    for (const [n, chunk] of wrap(inline(body), usable).entries()) {
+      out.push(`${n === 0 ? lead : cont}${chunk}`)
     }
   }
   line(`\n${out.join('\n')}\n`)

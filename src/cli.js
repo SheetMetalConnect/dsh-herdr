@@ -90,6 +90,15 @@ function render(update) {
         tickSpinner()
         return
       }
+      // A to-do update can arrive on the completion too; without this the list
+      // moves in the sidebar while the pane shows nothing.
+      const laterTodos = update.rawInput?.todos
+      if (Array.isArray(laterTodos) && laterTodos.length) {
+        state.todos = laterTodos
+        todos(laterTodos)
+        const finished = laterTodos.filter((t) => t.status === 'completed').length
+        bridge.metadata({ summary: `${finished}/${laterTodos.length} done` }).catch(() => {})
+      }
       if (update.status !== 'completed') return
       const took = call ? Date.now() - call.started : 0
       state.trace.push({ ...call, took, output: text })
@@ -430,17 +439,25 @@ async function runTurn(link, input, live) {
   stopSpinner()
   flushThought()
   flushAnswer()
+  // A turn can end while subagents are still out: their tool calls never
+  // completed. Reporting idle there says "done" about a pane that is still
+  // working, so the outstanding count decides the state.
+  const outstanding = [...state.calls.values()].filter((c) => c.key === 'agent').length
+  if (outstanding) {
+    warn(`${outstanding} subagent${outstanding > 1 ? 's' : ''} still running — ask again to collect`)
+  }
   if (result.error) fail(result.error)
   footer([
+    outstanding ? `${outstanding} subagent${outstanding > 1 ? 's' : ''} out` : '',
     bar(state.used, state.size),
     tokens(state.used, state.size),
     seconds(Date.now() - started),
     result.stopReason !== 'end_turn' ? result.stopReason : '',
   ])
-  const closing = result.error || result.stopReason === 'refusal' ? 'blocked' : 'idle'
+  const closing = result.error || result.stopReason === 'refusal' ? 'blocked' : outstanding ? 'working' : 'idle'
   bridge
     .report(closing, {
-      message: result.error ?? state.model,
+      message: result.error ?? (outstanding ? `${outstanding} subagents running` : state.model),
       sessionId: state.sessionId,
     })
     .catch(() => {})
