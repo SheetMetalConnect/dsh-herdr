@@ -241,9 +241,14 @@ function wrap(text, width) {
   return lines.length ? lines : ['']
 }
 
+// Closes a turn: a rule across the pane with the numbers sitting on its right
+// end, so every turn ends at the same place no matter how long the answer was.
 export function footer(parts) {
-  const text = parts.filter(Boolean).join(dim(' · '))
-  if (text) line(dim(`\n  ${text}\n`))
+  const text = parts.filter(Boolean).join(dim('  ·  '))
+  if (!text) return
+  const width = (process.stdout.columns || 100) - 2
+  const rule = Math.max(0, width - visibleLength(text) - 2)
+  line(`\n  ${muted('─'.repeat(rule))}  ${text}\n`)
 }
 
 export function notice(text) {
@@ -260,7 +265,7 @@ export function fail(text) {
 
 // Context fill as a short bar, because "80.2K / 1M" does not tell you how close
 // you are to a compaction.
-export function bar(used, size, width = 12) {
+export function bar(used, size, width = 10) {
   if (!used || !size) return ''
   const ratio = Math.min(1, used / size)
   // Never round a live context down to an empty bar; 1% still means "started".
