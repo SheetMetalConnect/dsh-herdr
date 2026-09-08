@@ -276,7 +276,7 @@ async function alive(url) {
   }
 }
 
-async function ensureWeb({ quiet = false } = {}) {
+async function ensureWeb({ quiet = false, timeoutMs = 30000 } = {}) {
   if (state.web) return state.web
 
   const cached = cachedWebUrl()
@@ -292,7 +292,8 @@ async function ensureWeb({ quiet = false } = {}) {
   })
   child.unref()
   const url = await new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(undefined), 30000)
+    const timer = setTimeout(() => resolve(undefined), timeoutMs)
+    child.once('exit', () => resolve(undefined))
     child.stdout.on('data', (d) => {
       const match = String(d).match(/http:\/\/127\.0\.0\.1:\d+\/\?token=[\w-]+/)
       if (match) {
@@ -448,11 +449,26 @@ async function main() {
   process.stdout.write(
     `\n ${sky('◆')} ${bold(repo)}${branch ? dim(` ${branch}`) : ''}  ${dim('·')}  ${sky(state.model)}${state.effort ? dim(` (${state.effort.toLowerCase()})`) : ''}\n`,
   )
-  if (!process.env.DSX_NO_WEB) {
-    const url = await ensureWeb({ quiet: true })
-    if (url) process.stdout.write(`   ${dim('web')}  ${dim(url)}\n`)
-  }
   process.stdout.write(`   ${dim('/help for commands')}\n`)
+
+  // Never block the prompt on a server: if the port is busy or the harness is
+  // slow, the line simply arrives later, or not at all.
+  if (!process.env.DSX_NO_WEB) {
+    void ensureWeb({ quiet: true, timeoutMs: 8000 }).then((url) => {
+      if (url) notice(url)
+    })
+  }
+
+  // Whatever sat in the terminal's input buffer before we got here — replayed
+  // scrollback, a paste into a dead prompt, keys pressed during startup — is
+  // not a queue of tasks. Drop it before readline can read it as lines.
+  if (process.stdin.isTTY) {
+    process.stdin.resume()
+    while (process.stdin.read() !== null) {
+      /* discard */
+    }
+    process.stdin.pause()
+  }
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
   rl.on('close', () => {
