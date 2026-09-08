@@ -7,7 +7,7 @@ import { connect, flattenOption, labelOfValue } from './session.js'
 import { readMcpServers } from './mcp.js'
 import {
   step, result, todos, answer, markTurnStart, footer, notice, warn, fail, tokens, seconds, bar,
-  dim, bold, sky, startSpinner, stopSpinner, setSpinnerLabel,
+  dim, bold, sky, muted, startSpinner, stopSpinner, setSpinnerLabel,
 } from './render.js'
 
 const bridge = createBridge({ agent: 'DeepSeek', source: 'custom:dsh' })
@@ -214,6 +214,7 @@ async function askPermission(rl, request) {
 }
 
 let inputClosed = false
+let showPromptRef
 
 // Resolves null once stdin is gone, so a piped script and a closed terminal
 // both end the loop instead of throwing ERR_USE_AFTER_CLOSE.
@@ -514,9 +515,8 @@ async function main() {
   const repo = cwd.split('/').pop()
   const branch = gitBranch(cwd)
   const space = herdrSpaceOfPane()
-  process.stdout.write(
-    `\n ${sky('◆')} ${bold(repo)}${branch ? dim(` ${branch}`) : ''}${space && space !== repo ? dim(`  in ${space}`) : ''}  ${dim('·')}  ${sky(state.model)}${state.effort ? dim(` (${state.effort.toLowerCase()})`) : ''}\n`,
-  )
+  state.repo = repo
+  if (space && space !== repo) process.stdout.write(`\n ${dim(`in ${space}`)}\n`)
   if (mcp.servers.length || mcp.skipped.length) {
     const loaded = mcp.servers.map((m) => m.name).join(' ')
     process.stdout.write(`   ${dim('mcp')}  ${dim(loaded || 'none')}\n`)
@@ -532,8 +532,12 @@ async function main() {
   // says so plainly when it cannot.
   if (!process.env.DSX_NO_WEB) {
     void ensureWeb({ quiet: true, timeoutMs: 8000 }).then((url) => {
+      // readline is sitting on the prompt line, so clear it before writing
+      // over the top of it, then draw the prompt again underneath.
+      if (process.stdout.isTTY) process.stdout.write('\r\u001b[K')
       if (url) notice(url)
       else notice(dim('no web UI — port busy; stop the old server and run /web'))
+      if (!running) showPromptRef?.()
     })
   }
 
@@ -557,9 +561,17 @@ async function main() {
   let cancelling = false
   let running = false
 
+  // A frame around the input, with the context on it: which repo, which branch,
+  // which model. Readline owns the last line, so the frame opens above it
+  // rather than closing below.
+  showPromptRef = () => showPrompt()
   const showPrompt = () => {
     if (inputClosed || rl.closed) return
-    rl.setPrompt(`\n${sky('›')} `)
+    const queued = queue.length ? dim(`  ·  ${queue.length} queued`) : ''
+    process.stdout.write(
+      `\n ${muted('╭─')} ${bold(repo)}${branch ? dim(` ${branch}`) : ''}${dim('  ·  ')}${sky(state.model)}${state.effort ? dim(` (${state.effort.toLowerCase()})`) : ''}${queued}\n`,
+    )
+    rl.setPrompt(` ${muted('╰─')}${sky('›')} `)
     rl.prompt()
   }
 
