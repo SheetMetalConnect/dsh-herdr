@@ -347,7 +347,7 @@ async function chooseOption(link, optionId, wanted) {
     choices.find((c) => c.name.toLowerCase().includes(String(wanted).toLowerCase()))
   if (!choice) return { error: `no ${optionId} matching "${wanted}"` }
   const res = await link.conn
-    .setSessionConfigOption({ sessionId: state.sessionId, optionId, value: choice.value })
+    .setSessionConfigOption({ sessionId: state.sessionId, configId: optionId, value: choice.value })
     .catch((e) => ({ error: e.message }))
   if (res?.error) return res
   option.currentValue = choice.value
@@ -410,10 +410,6 @@ async function main() {
     process.exit(1)
   }
 
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
-  rl.on('close', () => {
-    inputClosed = true
-  })
   const session = await link.conn.newSession({ cwd, mcpServers: [] })
   state.sessionId = session.sessionId
   state.options = session.configOptions ?? []
@@ -444,7 +440,6 @@ async function main() {
     await runTurn(link, args.prompt)
     await bridge.release().catch(() => {})
     link.close()
-    rl.close()
     process.exit(0)
   }
 
@@ -458,6 +453,11 @@ async function main() {
     if (url) process.stdout.write(`   ${dim('web')}  ${dim(url)}\n`)
   }
   process.stdout.write(`   ${dim('/help for commands')}\n`)
+
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout })
+  rl.on('close', () => {
+    inputClosed = true
+  })
 
   const queue = []
   let cancelling = false
