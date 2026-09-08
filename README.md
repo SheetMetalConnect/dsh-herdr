@@ -61,17 +61,15 @@ The key comes from `DEEPSEEK_API_KEY`, or `~/.config/deepseek/key` at mode 600.
 dsx                              # interactive session in the current repo
 dsx -p "run the tests"           # one turn, print, exit
 dsx --model pro --effort max     # pick the weight class at launch
-dsx --provider my-endpoint       # your own hardware
 dsx -v                           # full reasoning instead of one folded line
 ```
 
-Launch flags are what turn one command into a set of them — a flash alias for sweeps, a
-pro alias for the hard work, a local alias for a self-hosted endpoint:
+Launch flags are what turn one command into a set of them — a cheap lane for sweeps and a
+strong one for the hard work:
 
 ```sh
 alias dsxf='dsx --model flash'
 alias dsxp='dsx --model pro --effort max'
-alias dsxl='dsx --provider local'
 ```
 
 ## Defaults
@@ -109,15 +107,12 @@ its own dsh profile and point at that.
 
 ## Commands
 
-**Model and provider**
+**Model**
 
 | | |
 |---|---|
-| `/providers` | providers the harness knows, self-hosted ones included |
-| `/provider <id>` | select one — `/provider off <id>` disables it |
 | `/model` `/effort` | switch model or reasoning effort; no argument lists the choices |
 | `/set <id> <value>` | any other config option the harness exposes |
-| `/mode <name>` | session mode |
 
 **Sessions**
 
@@ -125,8 +120,7 @@ its own dsh profile and point at that.
 |---|---|
 | `/sessions` | sessions in this workspace |
 | `/resume <id>` | continue an earlier one, including work done in the browser |
-| `/fork` | branch this session, keeping its history |
-| `/new` `/delete <id>` | start fresh, or remove one |
+| `/new` | start fresh |
 
 **Seeing what happened**
 
