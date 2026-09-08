@@ -1,0 +1,38 @@
+{
+  "name": "herdr-bridge",
+  "version": "0.1.0",
+  "description": "Report any CLI coding agent's lifecycle state to a Herdr pane. Zero dependencies, no network, no credential access. Ships a DeepSeek Harness adapter.",
+  "license": "MIT",
+  "type": "commonjs",
+  "main": "src/bridge.js",
+  "bin": {
+    "herdr-report": "bin/herdr-report.js"
+  },
+  "files": [
+    "src",
+    "bin",
+    "adapters",
+    "README.md",
+    "SECURITY.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "node --check src/bridge.js && node --check bin/herdr-report.js && node --check adapters/dsh/plugin.js"
+  },
+  "keywords": [
+    "herdr",
+    "agent",
+    "deepseek-harness",
+    "dsh",
+    "tui",
+    "coding-agent"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SheetMetalConnect/herdr-bridge.git"
+  }
+}
