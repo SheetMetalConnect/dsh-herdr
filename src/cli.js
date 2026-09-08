@@ -285,10 +285,13 @@ function cachedWebUrl() {
   }
 }
 
+// The tokened URL answers with a redirect to "/", and following it drops the
+// token and comes back 401 — which reads as a dead server. Judge the first
+// response instead of the one it points at.
 async function alive(url) {
   try {
-    const res = await fetch(url, { signal: AbortSignal.timeout(1500) })
-    return res.status < 400
+    const res = await fetch(url, { redirect: 'manual', signal: AbortSignal.timeout(2000) })
+    return res.status < 400 || (res.status >= 300 && res.status < 400)
   } catch {
     return false
   }
