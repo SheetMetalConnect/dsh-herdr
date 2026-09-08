@@ -3,7 +3,11 @@ import readline from 'node:readline'
 import { spawn } from 'node:child_process'
 import { createBridge } from './bridge.js'
 import { connect, modelOf } from './session.js'
-import { step, answer, footer, notice, warn, fail, tokens, seconds, dim, bold, cyan } from './render.js'
+import {
+  step, answer, footer, notice, warn, fail, tokens, seconds,
+  dim, bold, sky, startSpinner, stopSpinner, setSpinnerLabel,
+} from './render.js'
+const cyan = sky
 
 const bridge = createBridge({ agent: 'dsh' })
 
@@ -34,18 +38,28 @@ function render(update) {
     }
     case 'agent_message_chunk':
       flushThought()
+      // The harness sends several assistant messages per turn: progress notes
+      // while subagents run, then the real answer. Glue them together and the
+      // result reads as one run-on paragraph, so each message id is its own block.
+      if (update.messageId && update.messageId !== state.messageId) {
+        flushAnswer()
+        state.messageId = update.messageId
+      }
       state.answer = (state.answer ?? '') + (update.content?.text ?? '')
       return
-    case 'tool_call':
+    case 'tool_call': {
       flushThought()
-      step(labelFor(update), detailOf(update))
+      const { key, detail } = describe(update)
+      step(key, detail)
+      setSpinnerLabel(detail || key)
       return
+    }
     case 'tool_call_update':
-      if (update.status === 'failed') step('Failed', update.title ?? '')
+      if (update.status === 'failed') step('failed', describe(update).detail)
       return
     case 'plan':
       flushThought()
-      for (const entry of update.entries ?? []) step('Plan', entry.content ?? '')
+      for (const entry of update.entries ?? []) step('plan', entry.content ?? '')
       return
     case 'usage_update':
       state.used = update.used ?? state.used
@@ -56,25 +70,54 @@ function render(update) {
   }
 }
 
-// The title carries the command name, rawInput carries what it actually runs.
-function detailOf(update) {
-  const raw = update.rawInput ?? {}
-  return raw.command ?? raw.description ?? raw.pattern ?? raw.path ?? raw.query ?? update.title ?? ''
+// dsh reports every tool with kind "other", so the tool name lives in `title`
+// and everything worth showing lives in `rawInput`.
+const DETAIL = {
+  read: (i) => i.file_path ?? i.path,
+  write: (i) => i.file_path ?? i.path,
+  edit: (i) => i.file_path ?? i.path,
+  glob: (i) => i.pattern,
+  grep: (i) => [i.pattern, i.path && basename(i.path)].filter(Boolean).join('  '),
+  bash: (i) => i.description ?? i.command,
+  subagent: (i) => i.description ?? oneLineTask(i.prompt),
+  fetch: (i) => i.url,
+  skill: (i) => i.name ?? i.skill,
 }
 
-function labelFor(update) {
-  const kind = `${update.kind ?? ''} ${update.title ?? ''}`.toLowerCase()
-  if (kind.includes('execute') || kind.includes('bash')) return 'Bash'
-  if (kind.includes('read')) return 'Read'
-  if (kind.includes('edit') || kind.includes('write')) return 'Edit'
-  if (kind.includes('search') || kind.includes('grep')) return 'Search'
-  if (kind.includes('fetch')) return 'Fetch'
-  return 'Tool'
+const KEY = {
+  read: 'read', write: 'write', edit: 'edit', glob: 'glob', grep: 'grep',
+  bash: 'bash', subagent: 'agent', list_agents: 'agents', fetch: 'fetch',
+  todo_write: 'plan', skill: 'skill',
+}
+
+function basename(p) {
+  return String(p).split('/').pop()
+}
+
+function oneLineTask(prompt) {
+  const line = String(prompt ?? '').split('\n').find((l) => l.trim())
+  return line ?? ''
+}
+
+function describe(update) {
+  const name = String(update.title ?? '').toLowerCase()
+  const raw = update.rawInput ?? {}
+  const detail = DETAIL[name]?.(raw) ?? raw.description ?? raw.command ?? update.title ?? ''
+  return { key: KEY[name] ?? 'tool', detail }
+}
+
+function flushAnswer() {
+  if (!state.answer?.trim()) {
+    state.answer = undefined
+    return
+  }
+  answer(state.answer)
+  state.answer = undefined
 }
 
 function flushThought() {
   if (state.verbose || !state.thought) return
-  step('Think', state.thought)
+  step('think', state.thought)
   state.thought = undefined
 }
 
@@ -84,9 +127,19 @@ async function askPermission(rl, request) {
   process.stdout.write(`\n${bold('  Permission')} ${request.toolCall?.title ?? ''}\n`)
   options.forEach((o, i) => process.stdout.write(dim(`   ${i + 1}. ${o.name ?? o.optionId}\n`)))
   const reply = await question(rl, cyan('  choose > '))
-  const picked = reply === null ? options[0] : options[Number(reply.trim()) - 1] ?? options[0]
   bridge.report('working').catch(() => {})
-  return picked?.optionId
+  // No terminal, no answer, or a number that is not on the list: refuse. Falling back to
+  // the first option would auto-approve whatever the agent asked for, unattended.
+  if (reply === null) {
+    warn('no input available — refused')
+    return undefined
+  }
+  const picked = options[Number(reply.trim()) - 1]
+  if (!picked) {
+    warn('refused')
+    return undefined
+  }
+  return picked.optionId
 }
 
 let inputClosed = false
@@ -152,15 +205,19 @@ function parseArgv(argv) {
 async function runTurn(link, input) {
   state.answer = undefined
   state.thought = undefined
+  state.messageId = undefined
   state.busy = true
+  setSpinnerLabel('thinking')
+  startSpinner('thinking')
   bridge.report('working', { message: input, sessionId: state.sessionId }).catch(() => {})
   const started = Date.now()
   const result = await link.conn
     .prompt({ sessionId: state.sessionId, prompt: [{ type: 'text', text: input }] })
     .catch((err) => ({ stopReason: 'error', error: err.message }))
   state.busy = false
+  stopSpinner()
   flushThought()
-  if (state.answer) answer(state.answer)
+  flushAnswer()
   if (result.error) fail(result.error)
   footer([
     tokens(state.used, state.size),

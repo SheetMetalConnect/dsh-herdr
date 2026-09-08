@@ -55,6 +55,26 @@ caller: an invalid state name, rejected before anything is spawned.
 all release pane authority, so a killed agent does not sit in the sidebar
 claiming to be busy.
 
+## The terminal client
+
+The client adds a second surface: it answers requests the harness makes of it, and those
+requests are shaped by a model that has read the repository.
+
+**File reads are confined to the workspace.** The harness asks the client to read files.
+Unchecked, a prompt injected into a source file, a README or a dependency could ask for
+`~/.config/deepseek/key` or `~/.ssh/id_rsa` and the client would hand it over. Paths are
+resolved through `realpath` and refused unless they land inside the session's working
+directory — which also closes the symlink route out. Writes are declined outright; the
+harness does its own writes under its own sandbox.
+
+**Permission prompts fail closed.** No terminal, no answer, or a number that is not on the
+list all refuse. An earlier version fell back to the first option, which in `-p` mode meant
+approving whatever the harness asked for with nobody watching.
+
+**The API key never reaches a command line.** It is read from `DEEPSEEK_API_KEY` or
+`~/.config/deepseek/key` and passed to the child process through its environment, so it
+does not appear in `ps` output or shell history.
+
 ## What is out of scope
 
 The bridge reports state. It does not read agent output, does not touch
