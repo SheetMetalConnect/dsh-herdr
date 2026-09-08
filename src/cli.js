@@ -229,6 +229,22 @@ function question(rl, prompt) {
 // Mirrors the Herdr sidebar: its workspaces are the repos you actually work in,
 // so they are the right list to jump between. Read live from the running Herdr
 // server, never stored, so nothing about the workspaces lands in this repo.
+// Which Herdr workspace this pane belongs to — the grouping you see in the
+// sidebar, so the header agrees with it.
+function herdrSpaceOfPane() {
+  const paneId = process.env.HERDR_PANE_ID
+  const bin = process.env.HERDR_BIN_PATH
+  if (!paneId || !bin) return undefined
+  const out = spawnSync(bin, ['pane', 'get', paneId], { encoding: 'utf8', shell: false })
+  if (out.status !== 0) return undefined
+  try {
+    const workspaceId = JSON.parse(out.stdout).result?.pane?.workspace_id
+    return herdrSpaces()?.find((w) => w.id === workspaceId)?.label
+  } catch {
+    return undefined
+  }
+}
+
 function herdrSpaces() {
   const bin = process.env.HERDR_BIN_PATH || 'herdr'
   const read = (args) => {
@@ -247,6 +263,7 @@ function herdrSpaces() {
   const cwdOf = new Map()
   for (const pane of panes) if (pane.workspace_id && pane.cwd) cwdOf.set(pane.workspace_id, pane.cwd)
   return spaces.map((w) => ({
+    id: w.workspace_id,
     label: w.label,
     status: w.agent_status,
     cwd: cwdOf.get(w.workspace_id),
@@ -303,7 +320,9 @@ async function ensureWeb({ quiet = false, timeoutMs = 30000 } = {}) {
     })
   })
   if (!url) {
-    if (!quiet) warn('web UI did not report a URL in time')
+    // A server already holding the port is the usual cause, and its token was
+    // only printed when it started, so it cannot be recovered from here.
+    if (!quiet) warn('no web UI: the port is busy or the harness did not answer in time')
     return undefined
   }
   try {
@@ -446,16 +465,20 @@ async function main() {
 
   const repo = cwd.split('/').pop()
   const branch = gitBranch(cwd)
+  const space = herdrSpaceOfPane()
   process.stdout.write(
-    `\n ${sky('◆')} ${bold(repo)}${branch ? dim(` ${branch}`) : ''}  ${dim('·')}  ${sky(state.model)}${state.effort ? dim(` (${state.effort.toLowerCase()})`) : ''}\n`,
+    `\n ${sky('◆')} ${bold(repo)}${branch ? dim(` ${branch}`) : ''}${space && space !== repo ? dim(`  in ${space}`) : ''}  ${dim('·')}  ${sky(state.model)}${state.effort ? dim(` (${state.effort.toLowerCase()})`) : ''}\n`,
   )
-  process.stdout.write(`   ${dim('/help for commands')}\n`)
+  process.stdout.write(
+    `   ${dim(`session ${state.sessionId.slice(0, 8)}`)}  ${dim('·')}  ${dim('/help for commands')}\n`,
+  )
 
-  // Never block the prompt on a server: if the port is busy or the harness is
-  // slow, the line simply arrives later, or not at all.
+  // Never block the prompt on a server: the link arrives when it arrives, and
+  // says so plainly when it cannot.
   if (!process.env.DSX_NO_WEB) {
     void ensureWeb({ quiet: true, timeoutMs: 8000 }).then((url) => {
       if (url) notice(url)
+      else notice(dim('no web UI — port busy; stop the old server and run /web'))
     })
   }
 
