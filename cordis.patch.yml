@@ -1,0 +1,11 @@
+# Bundle patch: insert the DeepSeek Harness adapter into the profile's layer
+# stack. `dsh plugin add herdr-bridge` joins this bundle automatically because
+# package.json declares `dsh.bundle.patch`.
+#
+# Override the sidebar label by patching the same row id from the profile's own
+# cordis.patch.yml — last write wins per row.
+- insert:
+    - id: herdr-bridge
+      name: 'herdr-bridge/adapters/dsh'
+      config:
+        agent: dsh

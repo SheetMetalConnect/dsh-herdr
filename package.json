@@ -12,6 +12,7 @@
     "src",
     "bin",
     "adapters",
+    "cordis.patch.yml",
     "README.md",
     "SECURITY.md",
     "LICENSE"
@@ -34,5 +35,14 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/SheetMetalConnect/herdr-bridge.git"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "exports": {
+    ".": "./src/bridge.js",
+    "./adapters/dsh": "./adapters/dsh/plugin.js"
   }
 }
