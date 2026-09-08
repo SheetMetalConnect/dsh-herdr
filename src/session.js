@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process'
-import { readFileSync, realpathSync } from 'node:fs'
-import { isAbsolute, resolve, sep } from 'node:path'
+import { readFileSync, realpathSync, writeFileSync, mkdirSync } from 'node:fs'
+import { isAbsolute, resolve, sep, dirname } from 'node:path'
 import { ClientSideConnection, ndJsonStream, PROTOCOL_VERSION } from '@agentclientprotocol/sdk'
 
 const KEY_FILE = `${process.env.HOME}/.config/deepseek/key`
@@ -89,8 +89,18 @@ export async function connect({ cwd = process.cwd(), handlers = {}, onExit } = {
         }
         return { content }
       },
-      async writeTextFile() {
+      async writeTextFile({ path, content }) {
+        if (!insideWorkspace(path, cwd)) {
+          throw new Error(`refused: ${path} is outside the workspace`)
+        }
+        mkdirSync(dirname(path), { recursive: true })
+        writeFileSync(path, content ?? '', 'utf8')
         return null
+      },
+      // The harness runs its own shell under its own sandbox; delegating
+      // execution to the client would hand it a second, unsandboxed one.
+      async createTerminal() {
+        throw new Error('terminal delegation is not offered by this client')
       },
     }),
     toWebStreams(child),
@@ -98,7 +108,7 @@ export async function connect({ cwd = process.cwd(), handlers = {}, onExit } = {
 
   const info = await conn.initialize({
     protocolVersion: PROTOCOL_VERSION,
-    clientCapabilities: { fs: { readTextFile: true, writeTextFile: false } },
+    clientCapabilities: { fs: { readTextFile: true, writeTextFile: true }, terminal: false },
   })
 
   return {
@@ -114,6 +124,24 @@ export async function connect({ cwd = process.cwd(), handlers = {}, onExit } = {
       }
     },
   }
+}
+
+// Config options arrive as select lists, optionally grouped by provider — so a
+// third-party provider shows up as another group without any change here.
+export function flattenOption(option) {
+  const out = []
+  for (const entry of option?.options ?? []) {
+    if (Array.isArray(entry.options)) {
+      for (const child of entry.options) out.push({ ...child, group: entry.name ?? entry.group })
+    } else {
+      out.push(entry)
+    }
+  }
+  return out
+}
+
+export function labelOfValue(option, value) {
+  return flattenOption(option).find((o) => o.value === value)?.name ?? value
 }
 
 export function modelOf(session) {

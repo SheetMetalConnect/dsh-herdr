@@ -3,7 +3,7 @@ import readline from 'node:readline'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createBridge } from './bridge.js'
-import { connect, modelOf } from './session.js'
+import { connect, modelOf, flattenOption, labelOfValue } from './session.js'
 import {
   step, result, todos, answer, markTurnStart, footer, notice, warn, fail, tokens, seconds, bar,
   dim, bold, sky, startSpinner, stopSpinner, setSpinnerLabel,
@@ -21,6 +21,8 @@ const state = {
   calls: new Map(),
   trace: [],
   todos: [],
+  options: [],
+  effort: undefined,
   web: undefined,
   busy: false,
 }
@@ -30,6 +32,10 @@ const HELP = `  /web        open the harness web UI on this session
   /space <n>  start a session in one of them
   /sessions   list sessions in this workspace
   /resume <id>  continue an earlier session
+  /providers  providers the harness knows, including your own endpoint
+  /provider   select one, or "off <id>" to disable it
+  /model      switch model, any provider the harness offers
+  /effort     reasoning effort: off, low, high, max
   /queue      what is waiting to run
   /todos      the current to-do list
   /trace      every tool call of the last turn, with its output
@@ -319,11 +325,35 @@ function gitBranch(cwd) {
 function parseArgv(argv) {
   const out = { prompt: undefined, verbose: false }
   for (let i = 0; i < argv.length; i++) {
-    if (argv[i] === '-p' || argv[i] === '--prompt') out.prompt = argv[++i]
-    else if (argv[i] === '-v' || argv[i] === '--verbose') out.verbose = true
-    else if (out.prompt === undefined) out.prompt = argv[i]
+    const arg = argv[i]
+    if (arg === '-p' || arg === '--prompt') out.prompt = argv[++i]
+    else if (arg === '-v' || arg === '--verbose') out.verbose = true
+    else if (arg === '-m' || arg === '--model') out.model = argv[++i]
+    else if (arg === '-e' || arg === '--effort') out.effort = argv[++i]
+    else if (arg === '--provider') out.provider = argv[++i]
+    else if (out.prompt === undefined) out.prompt = arg
   }
   return out
+}
+
+// One matcher behind both `/model pro` and `--model pro`: a number picks from
+// the list, anything else matches on name, so aliases stay readable.
+async function chooseOption(link, optionId, wanted) {
+  const option = state.options.find((o) => o.id === optionId)
+  if (!option) return { error: `no option "${optionId}"` }
+  const choices = flattenOption(option)
+  const choice =
+    choices[Number(wanted) - 1] ??
+    choices.find((c) => c.name.toLowerCase().includes(String(wanted).toLowerCase()))
+  if (!choice) return { error: `no ${optionId} matching "${wanted}"` }
+  const res = await link.conn
+    .setSessionConfigOption({ sessionId: state.sessionId, optionId, value: choice.value })
+    .catch((e) => ({ error: e.message }))
+  if (res?.error) return res
+  option.currentValue = choice.value
+  if (optionId === 'model') state.model = choice.name
+  if (optionId === 'reasoning_effort') state.effort = choice.name
+  return { name: choice.name }
 }
 
 async function runTurn(link, input) {
@@ -386,7 +416,26 @@ async function main() {
   })
   const session = await link.conn.newSession({ cwd, mcpServers: [] })
   state.sessionId = session.sessionId
-  state.model = modelOf(session) ?? 'deepseek'
+  state.options = session.configOptions ?? []
+  const modelOpt = state.options.find((o) => o.id === 'model')
+  const effortOpt = state.options.find((o) => o.id === 'reasoning_effort')
+  state.model = modelOpt ? labelOfValue(modelOpt, modelOpt.currentValue) : (modelOf(session) ?? 'deepseek')
+  state.effort = effortOpt ? labelOfValue(effortOpt, effortOpt.currentValue) : undefined
+
+  if (args.provider) {
+    const res = await link.conn
+      .unstable_setProvider({ providerId: args.provider })
+      .catch((e) => ({ error: e.message }))
+    if (res?.error) warn(res.error)
+  }
+  if (args.model) {
+    const applied = await chooseOption(link, 'model', args.model)
+    if (applied.error) warn(applied.error)
+  }
+  if (args.effort) {
+    const applied = await chooseOption(link, 'reasoning_effort', args.effort)
+    if (applied.error) warn(applied.error)
+  }
 
   bridge.attachExitHandlers()
   bridge.report('idle', { message: state.model, sessionId: state.sessionId }).catch(() => {})
@@ -402,7 +451,7 @@ async function main() {
   const repo = cwd.split('/').pop()
   const branch = gitBranch(cwd)
   process.stdout.write(
-    `\n ${sky('◆')} ${bold(repo)}${branch ? dim(` ${branch}`) : ''}  ${dim('·')}  ${sky(state.model)}\n`,
+    `\n ${sky('◆')} ${bold(repo)}${branch ? dim(` ${branch}`) : ''}  ${dim('·')}  ${sky(state.model)}${state.effort ? dim(` (${state.effort.toLowerCase()})`) : ''}\n`,
   )
   if (!process.env.DSX_NO_WEB) {
     const url = await ensureWeb({ quiet: true })
@@ -456,6 +505,92 @@ async function main() {
     if (cmd === 'verbose') {
       state.verbose = !state.verbose
       notice(`reasoning ${state.verbose ? 'shown' : 'folded'}`)
+      return true
+    }
+    if (cmd === 'model' || cmd === 'effort' || cmd === 'set') {
+      const wantedId = cmd === 'set' ? rest[0] : cmd === 'model' ? 'model' : 'reasoning_effort'
+      const option = state.options.find((o) => o.id === wantedId)
+      if (!option) {
+        warn(`no option "${wantedId}"; try ${state.options.map((o) => o.id).join(', ')}`)
+        return true
+      }
+      const choices = flattenOption(option)
+      const picked = cmd === 'set' ? rest.slice(1).join(' ') : rest.join(' ')
+      if (!picked) {
+        choices.forEach((c, i) => {
+          const here = c.value === option.currentValue
+          step(here ? 'agent' : 'tool', `${i + 1}. ${c.name}${c.group ? dim(`  ${c.group}`) : ''}${here ? sky('  ←') : ''}`)
+        })
+        notice(`/${cmd} <number or name>`)
+        return true
+      }
+      const applied = await chooseOption(link, option.id, picked)
+      if (applied.error) warn(applied.error)
+      else notice(`${option.name}: ${applied.name}`)
+      return true
+    }
+    if (cmd === 'providers') {
+      const list = await link.conn.unstable_listProviders({}).catch((e) => ({ error: e.message }))
+      if (list.error) {
+        warn(list.error)
+        return true
+      }
+      const providers = list.providers ?? []
+      if (!providers.length) warn('the harness reports no providers')
+      for (const pr of providers) {
+        step(pr.enabled === false ? 'tool' : 'agent', `${pr.id ?? pr.name}${pr.name && pr.id ? dim(`  ${pr.name}`) : ''}`)
+      }
+      notice('/provider <id> selects one, /provider off <id> disables it')
+      return true
+    }
+    if (cmd === 'provider') {
+      const off = rest[0] === 'off'
+      const id = (off ? rest.slice(1) : rest).join(' ')
+      if (!id) {
+        warn('usage: /provider <id>  or  /provider off <id>')
+        return true
+      }
+      const call = off
+        ? link.conn.unstable_disableProvider({ providerId: id })
+        : link.conn.unstable_setProvider({ providerId: id })
+      const res = await call.catch((e) => ({ error: e.message }))
+      if (res?.error) warn(res.error)
+      else notice(`provider ${off ? 'disabled' : 'selected'}: ${id}`)
+      return true
+    }
+    if (cmd === 'mode') {
+      const mode = rest.join(' ')
+      if (!mode) {
+        warn('usage: /mode <name>')
+        return true
+      }
+      const res = await link.conn
+        .setSessionMode({ sessionId: state.sessionId, modeId: mode })
+        .catch((e) => ({ error: e.message }))
+      if (res?.error) warn(res.error)
+      else notice(`mode: ${mode}`)
+      return true
+    }
+    if (cmd === 'fork') {
+      const res = await link.conn
+        .unstable_forkSession({ sessionId: state.sessionId, cwd })
+        .catch((e) => ({ error: e.message }))
+      if (res?.error) warn(res.error)
+      else {
+        state.sessionId = res.sessionId
+        notice(`forked to ${res.sessionId}`)
+      }
+      return true
+    }
+    if (cmd === 'delete') {
+      const id = rest[0]
+      if (!id) {
+        warn('usage: /delete <session-id>')
+        return true
+      }
+      const res = await link.conn.deleteSession({ sessionId: id }).catch((e) => ({ error: e.message }))
+      if (res?.error) warn(res.error)
+      else notice(`deleted ${id}`)
       return true
     }
     if (cmd === 'queue') {
