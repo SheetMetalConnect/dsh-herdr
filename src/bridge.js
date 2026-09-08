@@ -100,6 +100,16 @@ export function createBridge(options = {}) {
       return run(args)
     },
 
+    // Display-only tokens for the sidebar; $summary can be put in a row.
+    metadata(tokens = {}) {
+      const args = ['pane', 'report-metadata', paneId, '--source', source, '--agent', agent]
+      for (const [key, value] of Object.entries(tokens)) {
+        const clean = cleanMessage(String(value))
+        if (clean) args.push('--token', `${key}=${clean}`)
+      }
+      return run(args)
+    },
+
     // Idempotent.
     async release() {
       if (released) return false

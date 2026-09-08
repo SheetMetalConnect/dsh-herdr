@@ -70,6 +70,9 @@ function render(update) {
       if (Array.isArray(list) && list.length) {
         state.todos = list
         todos(list)
+        // Progress belongs in the sidebar too, so a glance says how far it is.
+        const done = list.filter((t) => t.status === 'completed').length
+        bridge.metadata({ summary: `${done}/${list.length} done` }).catch(() => {})
       } else {
         step(key, detail)
       }
