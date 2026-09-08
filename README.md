@@ -72,6 +72,21 @@ alias dsxf='dsx --model flash'
 alias dsxp='dsx --model pro --effort max'
 ```
 
+## MCP servers
+
+The harness accepts MCP servers per session. `dsx` reads the ones already configured for
+Claude Code — user scope plus the entry for this directory — and forwards only the ones you
+name:
+
+```sh
+DSX_MCP=obsidian,things dsx
+```
+
+Nothing is passed by default. Servers whose auth lives in an OAuth session are reported as
+not portable rather than passed and left to fail: the harness takes `url` and `headers`, and
+an OAuth session has no header to give. Linear's hosted server is one of these — reach it
+over its GraphQL API with a key in the environment instead.
+
 ## Defaults
 
 Every session — terminal, web and headless — starts from `~/.dsh/settings.yaml`:
@@ -134,7 +149,11 @@ its own dsh profile and point at that.
 | `/spaces` `/space <name>` | your Herdr workspaces, and jump to one |
 
 Type while a turn is running and your input is queued rather than swallowed; it drains in
-order when the turn ends. `Ctrl-C` cancels the turn, then clears the queue, then exits.
+order when the turn ends, and a pasted block counts as one message. `Ctrl-C` cancels the
+turn, then clears the queue, then exits.
+
+If the harness process dies underneath a session, the client reconnects, starts a fresh
+session and says that the earlier turns are not in its history.
 
 Output is line-based rather than a full-screen redraw, so scrollback, `pane_history` and
 ordinary copy-paste keep working.
