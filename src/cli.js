@@ -379,7 +379,28 @@ async function chooseOption(link, optionId, wanted) {
   return { name: choice.name }
 }
 
-async function runTurn(link, input) {
+// The harness runs as a child process, so it can die under you: killed by
+// hand, out of memory, a bad settings edit. Rather than leaving a prompt that
+// answers every turn with "connection closed", reconnect and say what was lost.
+async function reconnect(live) {
+  warn('the harness connection died — reconnecting')
+  try {
+    live.link?.close()
+  } catch {
+    /* already gone */
+  }
+  const link = await connect({ cwd: process.cwd(), handlers: live.handlers })
+  const fresh = await link.conn.newSession({ cwd: process.cwd(), mcpServers: [] })
+  live.link = link
+  state.sessionId = fresh.sessionId
+  state.options = fresh.configOptions ?? state.options
+  state.used = 0
+  state.todos = []
+  notice(`new session ${fresh.sessionId.slice(0, 8)} — earlier turns are not in its history`)
+  return link
+}
+
+async function runTurn(link, input, live) {
   state.answer = undefined
   state.thought = undefined
   state.messageId = undefined
@@ -391,9 +412,19 @@ async function runTurn(link, input) {
   startSpinner('thinking')
   bridge.report('working', { message: input, sessionId: state.sessionId }).catch(() => {})
   const started = Date.now()
-  const result = await link.conn
+  let result = await link.conn
     .prompt({ sessionId: state.sessionId, prompt: [{ type: 'text', text: input }] })
     .catch((err) => ({ stopReason: 'error', error: err.message }))
+
+  if (/connection closed|bridge has been disposed/i.test(result.error ?? '') && live) {
+    const revived = await reconnect(live).catch((err) => ({ error: err.message }))
+    if (revived?.error) fail(revived.error)
+    else {
+      result = await revived.conn
+        .prompt({ sessionId: state.sessionId, prompt: [{ type: 'text', text: input }] })
+        .catch((err) => ({ stopReason: 'error', error: err.message }))
+    }
+  }
   state.busy = false
   stopSpinner()
   flushThought()
@@ -450,11 +481,13 @@ async function main() {
     if (applied.error) warn(applied.error)
   }
 
+  const live = { link, handlers: { onUpdate: render } }
+
   bridge.attachExitHandlers()
   bridge.report('idle', { message: state.model, sessionId: state.sessionId }).catch(() => {})
 
   if (args.prompt) {
-    await runTurn(link, args.prompt)
+    await runTurn(link, args.prompt, live)
     await bridge.release().catch(() => {})
     link.close()
     process.exit(0)
@@ -524,7 +557,7 @@ async function main() {
   const handle = async (input) => {
     if (input.startsWith('/')) return command(input)
     cancelling = false
-    await runTurn(link, input)
+    await runTurn(link, input, live)
     return true
   }
 
@@ -664,8 +697,16 @@ async function main() {
     showPrompt()
   }
 
-  rl.on('line', (raw) => {
-    const input = raw.trim()
+  // A pasted block arrives as several line events within a few milliseconds.
+  // Nobody types that fast, so lines that land together are one message —
+  // otherwise every paragraph of a pasted brief becomes its own task.
+  let pasted = []
+  let pasteTimer
+
+  const submit = () => {
+    pasteTimer = undefined
+    const input = pasted.join('\n').trim()
+    pasted = []
     if (!input) {
       if (!running) showPrompt()
       return
@@ -673,6 +714,12 @@ async function main() {
     queue.push(input)
     if (running) notice(`queued (${queue.length})`)
     else void drain()
+  }
+
+  rl.on('line', (raw) => {
+    pasted.push(raw)
+    clearTimeout(pasteTimer)
+    pasteTimer = setTimeout(submit, 25)
   })
 
   showPrompt()
