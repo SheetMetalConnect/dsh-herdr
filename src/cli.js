@@ -3,13 +3,12 @@ import readline from 'node:readline'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { spawn, spawnSync } from 'node:child_process'
 import { createBridge } from './bridge.js'
-import { connect, modelOf, flattenOption, labelOfValue } from './session.js'
+import { connect, flattenOption, labelOfValue } from './session.js'
 import { readMcpServers } from './mcp.js'
 import {
   step, result, todos, answer, markTurnStart, footer, notice, warn, fail, tokens, seconds, bar,
   dim, bold, sky, startSpinner, stopSpinner, setSpinnerLabel,
 } from './render.js'
-const cyan = sky
 
 const bridge = createBridge({ agent: 'DeepSeek', source: 'custom:dsh' })
 
@@ -198,7 +197,7 @@ async function askPermission(rl, request) {
   const options = request.options ?? []
   process.stdout.write(`\n${bold('  Permission')} ${request.toolCall?.title ?? ''}\n`)
   options.forEach((o, i) => process.stdout.write(dim(`   ${i + 1}. ${o.name ?? o.optionId}\n`)))
-  const reply = await question(rl, cyan('  choose > '))
+  const reply = await question(rl, sky('  choose > '))
   bridge.report('working').catch(() => {})
   // No terminal, no answer, or a number that is not on the list: refuse. Falling back to
   // the first option would auto-approve whatever the agent asked for, unattended.
@@ -488,7 +487,7 @@ async function main() {
   state.options = session.configOptions ?? []
   const modelOpt = state.options.find((o) => o.id === 'model')
   const effortOpt = state.options.find((o) => o.id === 'reasoning_effort')
-  state.model = modelOpt ? labelOfValue(modelOpt, modelOpt.currentValue) : (modelOf(session) ?? 'deepseek')
+  state.model = modelOpt ? labelOfValue(modelOpt, modelOpt.currentValue) : 'deepseek'
   state.effort = effortOpt ? labelOfValue(effortOpt, effortOpt.currentValue) : undefined
 
   if (args.model) {

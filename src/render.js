@@ -23,7 +23,6 @@ export const peach = paint(FRAPPE.peach)
 export const muted = paint(FRAPPE.overlay)
 export const dim = (s) => (useColour ? `[2m${s}[0m` : s)
 export const bold = (s) => (useColour ? `[1m${s}[0m` : s)
-export const cyan = sky
 
 // icon, colour, and the label as it prints.
 export const TOOLS = {

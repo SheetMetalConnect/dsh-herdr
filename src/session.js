@@ -144,13 +144,3 @@ export function labelOfValue(option, value) {
   return flattenOption(option).find((o) => o.value === value)?.name ?? value
 }
 
-export function modelOf(session) {
-  const opt = session?.configOptions?.find((o) => o.id === 'model')
-  if (!opt?.currentValue) return undefined
-  try {
-    const parsed = JSON.parse(opt.currentValue)
-    return Array.isArray(parsed) ? parsed[parsed.length - 1] : String(parsed)
-  } catch {
-    return String(opt.currentValue)
-  }
-}
