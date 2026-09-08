@@ -1,20 +1,5 @@
 'use strict'
 
-// Reports agent lifecycle state to a Herdr pane.
-//
-// Herdr hands every pane HERDR_ENV, HERDR_PANE_ID, HERDR_BIN_PATH and
-// HERDR_SOCKET_PATH. An agent that reports through them shows up in the
-// sidebar with live state instead of as an anonymous shell.
-//
-// Security posture, because this runs inside an agent host that holds API
-// keys and a shell:
-//   - no dependencies, so no supply chain
-//   - never spawns a shell; argv array only, so message text cannot inject
-//   - HERDR_BIN_PATH must be an absolute, existing, executable file
-//   - reads nothing from the environment but the four HERDR_* variables
-//   - no network, no filesystem writes, no credential access
-//   - every failure is swallowed: a broken bridge must never take down the
-//     agent it is reporting on
 
 const { spawn } = require('node:child_process')
 const { accessSync, statSync, constants } = require('node:fs')
@@ -23,8 +8,7 @@ const { isAbsolute } = require('node:path')
 const STATES = Object.freeze(['idle', 'working', 'blocked', 'unknown'])
 const MESSAGE_MAX = 200
 
-// Control characters would corrupt the sidebar; the length cap keeps a
-// runaway model from pushing a whole file into a pane label.
+// Status text is model output: strip control chars, cap the length.
 function cleanMessage(text) {
   if (typeof text !== 'string') return undefined
   // eslint-disable-next-line no-control-regex
@@ -33,8 +17,7 @@ function cleanMessage(text) {
   return stripped.length > MESSAGE_MAX ? stripped.slice(0, MESSAGE_MAX - 1) + '\u2026' : stripped
 }
 
-// An attacker who can set HERDR_BIN_PATH would otherwise get arbitrary
-// execution inside the agent host on every state change.
+// HERDR_BIN_PATH is env-controlled; unchecked it is arbitrary execution.
 function usableBin(binPath) {
   if (typeof binPath !== 'string' || !binPath || !isAbsolute(binPath)) return false
   try {
@@ -63,8 +46,7 @@ function createBridge(options = {}) {
   const { active, paneId, binPath } = readEnv(env)
   const enabled = Boolean(active && paneId && usableBin(binPath))
 
-  // Herdr resolves conflicting reports by sequence number. A counter that
-  // only ever climbs means a slow report cannot overwrite a newer state.
+  // Climbing seq: a slow report cannot overwrite a newer state.
   let seq = 0
   let released = false
 
@@ -120,7 +102,7 @@ function createBridge(options = {}) {
       return run(args)
     },
 
-    // Hands pane authority back. Safe to call more than once.
+    // Idempotent.
     async release() {
       if (released) return false
       const args = [
@@ -139,8 +121,7 @@ function createBridge(options = {}) {
       return ok
     },
 
-    // Reports released state on exit so a killed agent does not linger in the
-    // sidebar as "working" forever.
+    // So a killed agent does not linger as "working".
     attachExitHandlers(proc = process) {
       if (!enabled) return () => {}
       const done = () => {

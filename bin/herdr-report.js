@@ -1,15 +1,6 @@
 #!/usr/bin/env node
 'use strict'
 
-// Shell-facing side of the bridge, for agents that expose hooks instead of a
-// plugin API. Drop it in a start/stop hook and the pane reports state.
-//
-//   herdr-report --agent dsh --state working --message "running tests"
-//   herdr-report --agent dsh --release
-//
-// Outside a Herdr pane it exits 0 and does nothing, so the same hook script
-// stays safe in a plain terminal.
-
 const { createBridge, STATES } = require('../src/bridge.js')
 
 function parseArgs(argv) {
