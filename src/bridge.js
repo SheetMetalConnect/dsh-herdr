@@ -1,15 +1,13 @@
-'use strict'
 
+import { spawn } from 'node:child_process'
+import { accessSync, statSync, constants } from 'node:fs'
+import { isAbsolute } from 'node:path'
 
-const { spawn } = require('node:child_process')
-const { accessSync, statSync, constants } = require('node:fs')
-const { isAbsolute } = require('node:path')
-
-const STATES = Object.freeze(['idle', 'working', 'blocked', 'unknown'])
-const MESSAGE_MAX = 200
+export const STATES = Object.freeze(['idle', 'working', 'blocked', 'unknown'])
+export const MESSAGE_MAX = 200
 
 // Status text is model output: strip control chars, cap the length.
-function cleanMessage(text) {
+export function cleanMessage(text) {
   if (typeof text !== 'string') return undefined
   // eslint-disable-next-line no-control-regex
   const stripped = text.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
@@ -18,7 +16,7 @@ function cleanMessage(text) {
 }
 
 // HERDR_BIN_PATH is env-controlled; unchecked it is arbitrary execution.
-function usableBin(binPath) {
+export function usableBin(binPath) {
   if (typeof binPath !== 'string' || !binPath || !isAbsolute(binPath)) return false
   try {
     if (!statSync(binPath).isFile()) return false
@@ -37,7 +35,7 @@ function readEnv(env) {
   }
 }
 
-function createBridge(options = {}) {
+export function createBridge(options = {}) {
   const env = options.env || process.env
   const agent = options.agent
   if (!agent || typeof agent !== 'string') throw new TypeError('agent label is required')
@@ -136,4 +134,3 @@ function createBridge(options = {}) {
   }
 }
 
-module.exports = { createBridge, STATES, cleanMessage, usableBin, MESSAGE_MAX }

@@ -1,11 +1,12 @@
 {
-  "name": "herdr-bridge",
-  "version": "0.1.0",
-  "description": "Report any CLI coding agent's lifecycle state to a Herdr pane. Zero dependencies, no network, no credential access. Ships a DeepSeek Harness adapter.",
+  "name": "dsh-herdr",
+  "version": "0.2.0",
+  "description": "DeepSeek Harness in your terminal, wired into Herdr: an interactive ACP client with live pane state and one-key handoff to the harness web UI.",
   "license": "MIT",
-  "type": "commonjs",
+  "type": "module",
   "main": "src/bridge.js",
   "bin": {
+    "dsx": "src/cli.js",
     "herdr-report": "bin/herdr-report.js"
   },
   "files": [
@@ -22,10 +23,10 @@
     "check": "node --check src/bridge.js && node --check bin/herdr-report.js && node --check adapters/dsh/plugin.js"
   },
   "keywords": [
-    "herdr",
-    "agent",
     "deepseek-harness",
     "dsh",
+    "herdr",
+    "acp",
     "tui",
     "coding-agent"
   ],
@@ -34,7 +35,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/SheetMetalConnect/herdr-bridge.git"
+    "url": "git+https://github.com/SheetMetalConnect/dsh-herdr.git"
   },
   "dsh": {
     "bundle": {
@@ -44,5 +45,8 @@
   "exports": {
     ".": "./src/bridge.js",
     "./adapters/dsh": "./adapters/dsh/plugin.js"
+  },
+  "dependencies": {
+    "@agentclientprotocol/sdk": "1.4.0"
   }
 }

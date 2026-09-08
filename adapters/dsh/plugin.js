@@ -1,8 +1,6 @@
-'use strict'
+import { createBridge } from '../../src/bridge.js'
 
-const { createBridge } = require('../../src/bridge.js')
-
-const name = 'herdr-bridge'
+export const name = 'dsh-herdr'
 
 const TRANSITIONS = [
   ['agent/session-start', 'working'],
@@ -23,7 +21,7 @@ const TRANSITIONS = [
   ['agent/error', 'blocked'],
 ]
 
-function apply(ctx, config = {}) {
+export function apply(ctx, config = {}) {
   const bridge = createBridge({
     agent: config.agent || 'dsh',
     source: config.source,
@@ -56,4 +54,3 @@ function apply(ctx, config = {}) {
   }
 }
 
-module.exports = { name, apply }

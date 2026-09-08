@@ -1,110 +1,117 @@
-# herdr-bridge
+# dsh-herdr
 
-Make any CLI coding agent show up as a first-class agent in [Herdr](https://herdr.dev) —
-live `idle` / `working` / `blocked` in the sidebar instead of an anonymous shell.
+DeepSeek Harness in your terminal, wired into [Herdr](https://herdr.dev).
 
-Ships an adapter for [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness),
-which has no Herdr integration of its own.
+DeepSeek ships `web`, `headless`, `sdk` and `acp` profiles — no interactive terminal
+client. So a harness pane is either a browser tab or a one-shot command, and Herdr sees an
+anonymous shell either way. This closes both gaps: an interactive client over the standard
+Agent Client Protocol, with live `idle` / `working` / `blocked` in the Herdr sidebar and a
+one-key handoff to the harness web UI.
 
-## Quick start: DeepSeek Harness in Herdr
+```
+› Which package manager does this repo use, and what is the test command?
 
-```sh
-npm install -g @deepseek-ai/dsh
-dsh plugin --profile headless add herdr-bridge
+  Think     The user asks: which package manager does this repo use…
+  Bash      ls -1 | head -50; echo "---"; ls -d *lock* pnpm-workspace.yaml…
+  Read      package.json
+
+  This repo uses npm (package-lock.json), and the test command is `npm test`.
+
+  12.3K / 1M tokens · 6s
 ```
 
-Then, in a Herdr pane, inside the repo you want to work on:
+## Install
 
 ```sh
-DEEPSEEK_API_KEY=… dsh --profile headless "list the top-level packages"
+npm install -g @deepseek-ai/dsh github:SheetMetalConnect/dsh-herdr
 ```
 
-The sidebar row for that pane becomes `dsh`, and follows the run.
+The DeepSeek key comes from `DEEPSEEK_API_KEY`, or `~/.config/deepseek/key` (mode 600).
 
-Three things that are not obvious:
-
-**Reasoning goes to stderr, the answer to stdout.** `dsh --profile headless` streams
-its whole thought process to the terminal. Redirect it and you get just the answer:
+## Use
 
 ```sh
-dsh --profile headless "…" 2>/dev/null
+dsx                     # interactive session in the current repo
+dsx -p "run the tests"  # one turn, print, exit
+dsx -v                  # show full reasoning instead of one folded line
 ```
 
-**A pane already running another agent wins.** Herdr gives each pane exactly one
-status authority, so an integration with full lifecycle hooks — Claude Code, Codex,
-opencode — stays authoritative and dsh's reports are ignored. This is by design, not a
-failure. Start dsh in a fresh pane. `herdr agent explain <pane-id>` shows which source
-won and why.
+| Command | |
+|---|---|
+| `/web` | start the harness web UI and print its URL — same `$DSH_HOME`, so this session is in that list |
+| `/sessions` | sessions in this workspace |
+| `/resume <id>` | continue an earlier session, including one you worked on in the browser |
+| `/new` | fresh session |
+| `/verbose` | fold or unfold reasoning |
+| `/help` `/quit` | |
 
-**Single-shot headless can miss the opening `working`.** The job may begin before the
-plugin is mounted, so the first `turn/start` is already past and only the closing
-`turn/end` lands. Anything with more than one turn reports normally.
+`Ctrl-C` cancels the running turn; again exits.
 
-The web UI (`dsh web --no-open`) is a separate window onto the same sessions — trajectory
-viewer, tool calls, token and cache meters. It is not needed to run tasks, binds loopback
-only, and prints a tokenised URL.
+Output is line-based rather than a full-screen redraw, so Herdr's scrollback, `pane_history`
+and ordinary copy-paste keep working.
 
-## The contract
+## In Herdr
 
-Herdr hands every pane `HERDR_ENV`, `HERDR_PANE_ID`, `HERDR_BIN_PATH` and
-`HERDR_SOCKET_PATH`. An agent reports state by calling the herdr binary and releases the
-pane on exit. States are `idle`, `working`, `blocked`, `unknown`.
+The pane reports `working` while a turn runs, `blocked` when the harness asks for
+permission — the state that raises a notification — and `idle` when it is your move. The
+session id goes with it, so Herdr can put the pane back into its own conversation after a
+server restart.
 
-Report `blocked` only when a person actually has to decide something — that is what
-raises the notification. Everything else dilutes it.
+Herdr gives each pane exactly one status authority. Start `dsx` in a fresh pane: in a pane
+already running Claude Code, Codex or opencode, that integration stays authoritative and
+these reports are ignored by design. `herdr agent explain <pane-id>` shows which source won.
 
-## From a shell or a hook
+## Handoff, both directions
 
-For agents that expose start/stop hooks, no code is needed:
+`/web` starts `dsh web --no-open` and prints a tokenised loopback URL. It never opens a
+browser tab. Because both sides share `$DSH_HOME`, the session you are typing in appears in
+that list; work you continue in the browser lands in the same session file, and `/resume`
+brings it back to the terminal.
+
+## Reporting state from another agent
+
+The Herdr side is a standalone, dependency-free module. Any CLI can use it:
 
 ```sh
 herdr-report --agent my-agent --state working --message "running tests"
-herdr-report --agent my-agent --state blocked --message "waiting for approval"
 herdr-report --agent my-agent --release
 ```
 
-Outside a Herdr pane it exits 0 and does nothing, so the same script is safe in a plain
-terminal.
-
-## From Node
-
 ```js
-const { createBridge } = require('herdr-bridge')
+import { createBridge } from 'dsh-herdr/src/bridge.js'
 
 const bridge = createBridge({ agent: 'my-agent' })
 bridge.attachExitHandlers()
-
-await bridge.report('working', { message: 'indexing repository' })
-await bridge.release()
+await bridge.report('working', { message: 'indexing' })
 ```
 
-`bridge.enabled` is `false` outside Herdr and every call becomes a no-op, so there is
-nothing to branch on.
+Outside a Herdr pane both are no-ops, so the same script is safe in a plain terminal.
 
-Pass `sessionId` and `sessionPath` when your agent has a native session reference; Herdr
-uses them to put a pane back into its own conversation after a server restart.
+There is also a dsh plugin (`adapters/dsh`) that reports state from inside the harness
+itself, for the `headless` and `web` profiles:
 
-## Writing another adapter
+```sh
+dsh plugin --profile headless add github:SheetMetalConnect/dsh-herdr
+```
 
-`adapters/dsh/plugin.js` is the worked example: create a bridge, map the host's events
-onto the four states, release on exit. The plumbing is trivial; the real question is
-which of your host's events genuinely mean "a person has to look at this now".
+Note that a single-shot headless job can start before the plugin mounts, so the opening
+`turn/start` is already past and only the closing `turn/end` lands.
+
+## Security
+
+This runs inside a process holding API keys and a shell. The threat model is in
+[SECURITY.md](SECURITY.md): the Herdr side has no dependencies, no network, no filesystem
+writes, no credential access, never a shell, and a validated binary path.
 
 ## Troubleshooting
 
 | Symptom | Cause |
 |---|---|
-| Sidebar shows the other agent, not yours | One status authority per pane. Use a fresh pane. |
-| Nothing reports at all | Not in a Herdr pane, or `HERDR_BIN_PATH` is not an absolute executable file. `bridge.enabled` is then `false` by design. |
-| Installed but inert | The package must declare `dsh.bundle.patch`; `dsh plugin add` only joins bundles. Check `dsh.profile.bundles` in the profile's `package.json`. |
-| pnpm skips the update | `dsh plugin add` reuses the lockfile. Pin the commit: `add "github:owner/repo#<sha>"`. |
-| Only `idle`, never `working` | Single-shot headless; see above. |
-
-## Security
-
-This runs inside a process holding API keys and a shell. The threat model is in
-[SECURITY.md](SECURITY.md): no dependencies, no network, no filesystem writes, no
-credential access, never a shell, validated binary path.
+| Sidebar shows another agent | One status authority per pane. Use a fresh pane. |
+| Nothing reports at all | Not in a Herdr pane, or `HERDR_BIN_PATH` is not an absolute executable file. |
+| `no DeepSeek key` | Set `DEEPSEEK_API_KEY` or write `~/.config/deepseek/key`. |
+| Plugin installed but inert | `dsh plugin add` only joins packages declaring `dsh.bundle.patch`. Check `dsh.profile.bundles` in the profile's `package.json`. |
+| pnpm skips an update | It reuses the lockfile. Pin the commit: `add "github:owner/repo#<sha>"`. |
 
 ## Licence
 

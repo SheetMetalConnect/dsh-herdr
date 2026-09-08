@@ -1,7 +1,5 @@
 #!/usr/bin/env node
-'use strict'
-
-const { createBridge, STATES } = require('../src/bridge.js')
+import { createBridge, STATES } from '../src/bridge.js'
 
 function parseArgs(argv) {
   const out = { release: false }
