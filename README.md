@@ -9,16 +9,26 @@ Agent Client Protocol, with live `idle` / `working` / `blocked` in the Herdr sid
 one-key handoff to the harness web UI.
 
 ```
-› Which package manager does this repo use, and what is the test command?
+› Review this repo and name the three weakest spots
 
-  Think     The user asks: which package manager does this repo use…
-  Bash      ls -1 | head -50; echo "---"; ls -d *lock* pnpm-workspace.yaml…
-  Read      package.json
+  ☰ To-dos  1 in progress, 2 pending
+    ◐ Survey repo structure and read project instructions
+    ○ Review routes, hooks and shared modules
+    ○ Summarise findings
+  ◇ Think   This is a large monorepo. Let me split the review…
+  ▶ Bash    List repo root and recent git history
+  ⌕ Glob    *.json
+  ⚑ Agent   Review Supabase backend weaknesses
+    └ Three findings, strongest first: …                    52s
 
-  This repo uses npm (package-lock.json), and the test command is `npm test`.
+  <the answer>
 
-  12.3K / 1M tokens · 6s
+  ███░░░░░░░░░ · 80.2K / 1M tokens · 205s
 ```
+
+Each tool gets its own icon and colour, a spinner carries the current step, and while
+subagents are out it says how many are running. Slow calls report what they cost; a
+subagent always reports what it came back with.
 
 ## Install
 
@@ -39,6 +49,10 @@ dsx -v                  # show full reasoning instead of one folded line
 | Command | |
 |---|---|
 | `/web` | start the harness web UI and print its URL — same `$DSH_HOME`, so this session is in that list |
+| `/todos` | the current to-do list, with per-item status |
+| `/trace` | every tool call of the last turn, with what it returned |
+| `/spaces` | your Herdr workspaces, read live from the running server |
+| `/space <name>` | start a session in one of them |
 | `/sessions` | sessions in this workspace |
 | `/resume <id>` | continue an earlier session, including one you worked on in the browser |
 | `/new` | fresh session |

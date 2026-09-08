@@ -116,6 +116,44 @@ export function fail(text) {
   line(`  ${red('✗')} ${text}\n`)
 }
 
+// Context fill as a short bar, because "80.2K / 1M" does not tell you how close
+// you are to a compaction.
+export function bar(used, size, width = 12) {
+  if (!used || !size) return ''
+  const ratio = Math.min(1, used / size)
+  // Never round a live context down to an empty bar; 1% still means "started".
+  const filled = Math.max(1, Math.round(ratio * width))
+  const shade = ratio > 0.85 ? red : ratio > 0.6 ? yellow : green
+  return `${shade('█'.repeat(filled))}${muted('░'.repeat(width - filled))}`
+}
+
+const TODO_MARK = {
+  completed: () => green('✓'),
+  in_progress: () => sky('◐'),
+  pending: () => muted('○'),
+  cancelled: () => muted('✗'),
+}
+
+export function todos(items) {
+  const counts = items.reduce((acc, t) => ({ ...acc, [t.status]: (acc[t.status] ?? 0) + 1 }), {})
+  const summary = ['in_progress', 'pending', 'completed']
+    .filter((k) => counts[k])
+    .map((k) => `${counts[k]} ${k.replace('_', ' ')}`)
+    .join(', ')
+  line(`  ${mauve('☰')} ${mauve('To-dos'.padEnd(LABEL_WIDTH))} ${dim(summary)}\n`)
+  for (const t of items) {
+    const mark = (TODO_MARK[t.status] ?? TODO_MARK.pending)()
+    const text = t.status === 'completed' ? muted(oneLine(t.content)) : dim(oneLine(t.content))
+    line(`    ${mark} ${text}\n`)
+  }
+}
+
+export function result(key, text, extra = '') {
+  const [, colour] = TOOLS[key] ?? TOOLS.tool
+  const tail = extra ? dim(`  ${extra}`) : ''
+  line(`    ${colour('└')} ${dim(oneLine(text))}${tail}\n`)
+}
+
 export function tokens(used, size) {
   if (!used) return ''
   const k = (n) =>

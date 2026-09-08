@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import readline from 'node:readline'
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { createBridge } from './bridge.js'
 import { connect, modelOf } from './session.js'
 import {
-  step, answer, footer, notice, warn, fail, tokens, seconds,
+  step, result, todos, answer, footer, notice, warn, fail, tokens, seconds, bar,
   dim, bold, sky, startSpinner, stopSpinner, setSpinnerLabel,
 } from './render.js'
 const cyan = sky
@@ -17,13 +17,20 @@ const state = {
   used: 0,
   size: 0,
   verbose: Boolean(process.env.DSX_VERBOSE),
+  calls: new Map(),
+  trace: [],
+  todos: [],
   web: undefined,
   busy: false,
 }
 
 const HELP = `  /web        open the harness web UI on this session
+  /spaces     your herdr workspaces
+  /space <n>  start a session in one of them
   /sessions   list sessions in this workspace
   /resume <id>  continue an earlier session
+  /todos      the current to-do list
+  /trace      every tool call of the last turn, with its output
   /verbose    toggle full reasoning
   /new        start a fresh session
   /help /quit`
@@ -50,13 +57,40 @@ function render(update) {
     case 'tool_call': {
       flushThought()
       const { key, detail } = describe(update)
-      step(key, detail)
-      setSpinnerLabel(detail || key)
+      state.calls.set(update.toolCallId, { key, detail, started: Date.now() })
+      const list = update.rawInput?.todos
+      if (Array.isArray(list) && list.length) {
+        state.todos = list
+        todos(list)
+      } else {
+        step(key, detail)
+      }
+      tickSpinner()
       return
     }
-    case 'tool_call_update':
-      if (update.status === 'failed') step('failed', describe(update).detail)
+    case 'tool_call_update': {
+      const call = state.calls.get(update.toolCallId)
+      const text = (update.content ?? [])
+        .map((c) => c.content?.text ?? '')
+        .join(' ')
+        .trim()
+      if (update.status === 'failed') {
+        step('failed', call?.detail ?? text)
+        state.calls.delete(update.toolCallId)
+        tickSpinner()
+        return
+      }
+      if (update.status !== 'completed') return
+      const took = call ? Date.now() - call.started : 0
+      state.trace.push({ ...call, took, output: text })
+      state.calls.delete(update.toolCallId)
+      // A subagent is the slow, interesting one: always show what came back.
+      // Everything else only reports when it was slow enough to have been felt.
+      if (call?.key === 'agent') result('agent', text || 'done', seconds(took))
+      else if (took > 3000 && call) result(call.key, call.detail, seconds(took))
+      tickSpinner()
       return
+    }
     case 'plan':
       flushThought()
       for (const entry of update.entries ?? []) step('plan', entry.content ?? '')
@@ -104,6 +138,16 @@ function describe(update) {
   const raw = update.rawInput ?? {}
   const detail = DETAIL[name]?.(raw) ?? raw.description ?? raw.command ?? update.title ?? ''
   return { key: KEY[name] ?? 'tool', detail }
+}
+
+// The spinner doubles as the subagent monitor: while agents are out, it says
+// how many and stops pretending the run is one linear thing.
+function tickSpinner() {
+  const running = [...state.calls.values()]
+  const agents = running.filter((c) => c.key === 'agent').length
+  if (agents > 0) setSpinnerLabel(`${agents} subagent${agents > 1 ? 's' : ''} running`)
+  else if (running.length) setSpinnerLabel(running[running.length - 1].detail || 'working')
+  else setSpinnerLabel('thinking')
 }
 
 function flushAnswer() {
@@ -165,6 +209,33 @@ function question(rl, prompt) {
   })
 }
 
+// Mirrors the Herdr sidebar: its workspaces are the repos you actually work in,
+// so they are the right list to jump between. Read live from the running Herdr
+// server, never stored, so nothing about the workspaces lands in this repo.
+function herdrSpaces() {
+  const bin = process.env.HERDR_BIN_PATH || 'herdr'
+  const read = (args) => {
+    const out = spawnSync(bin, args, { encoding: 'utf8', shell: false })
+    if (out.status !== 0) return undefined
+    try {
+      return JSON.parse(out.stdout).result
+    } catch {
+      return undefined
+    }
+  }
+  const spaces = read(['workspace', 'list'])?.workspaces
+  if (!spaces) return undefined
+  // Workspace rows carry a label but no path; the panes inside them do.
+  const panes = read(['agent', 'list'])?.agents ?? []
+  const cwdOf = new Map()
+  for (const pane of panes) if (pane.workspace_id && pane.cwd) cwdOf.set(pane.workspace_id, pane.cwd)
+  return spaces.map((w) => ({
+    label: w.label,
+    status: w.agent_status,
+    cwd: cwdOf.get(w.workspace_id),
+  }))
+}
+
 async function openWeb() {
   if (state.web) {
     notice(state.web)
@@ -206,6 +277,8 @@ async function runTurn(link, input) {
   state.answer = undefined
   state.thought = undefined
   state.messageId = undefined
+  state.calls.clear()
+  state.trace = []
   state.busy = true
   setSpinnerLabel('thinking')
   startSpinner('thinking')
@@ -220,6 +293,7 @@ async function runTurn(link, input) {
   flushAnswer()
   if (result.error) fail(result.error)
   footer([
+    bar(state.used, state.size),
     tokens(state.used, state.size),
     seconds(Date.now() - started),
     result.stopReason !== 'end_turn' ? result.stopReason : '',
@@ -297,6 +371,50 @@ async function main() {
       if (cmd === 'verbose') {
         state.verbose = !state.verbose
         notice(`reasoning ${state.verbose ? 'shown' : 'folded'}`)
+        continue
+      }
+      if (cmd === 'todos') {
+        if (!state.todos.length) warn('no to-do list in this session yet')
+        else todos(state.todos)
+        continue
+      }
+      if (cmd === 'spaces') {
+        const spaces = herdrSpaces()
+        if (!spaces) {
+          warn('no herdr server to read workspaces from')
+          continue
+        }
+        for (const w of spaces) {
+          step(w.status === 'working' ? 'agent' : 'tool', `${w.label}${w.cwd ? dim(`  ${w.cwd}`) : ''}`)
+        }
+        notice('/space <name> starts a session there')
+        continue
+      }
+      if (cmd === 'space') {
+        const wanted = rest.join(' ').toLowerCase()
+        const match = (herdrSpaces() ?? []).find(
+          (w) => w.cwd && w.label.toLowerCase().startsWith(wanted),
+        )
+        if (!match) {
+          warn(`no herdr workspace matching "${wanted}" with a known path`)
+          continue
+        }
+        const moved = await link.conn.newSession({ cwd: match.cwd, mcpServers: [] })
+        state.sessionId = moved.sessionId
+        state.used = 0
+        process.chdir(match.cwd)
+        notice(`${match.label}  ${match.cwd}`)
+        continue
+      }
+      if (cmd === 'trace') {
+        if (!state.trace.length) {
+          warn('no tool calls in the last turn')
+          continue
+        }
+        for (const t of state.trace) {
+          step(t.key, t.detail)
+          if (t.output) result(t.key, t.output, seconds(t.took))
+        }
         continue
       }
       if (cmd === 'web') {
