@@ -20,7 +20,7 @@ sidebar, and a handoff to the harness web UI that works in both directions.
 ---
 
 ```
- ◆ my-repo main  ·  DeepSeek-V4-Pro (max)
+ ◆ my-repo main  ·  DeepSeek-Flash (max)
    web  http://127.0.0.1:3080/?token=…
    /help for commands
 
@@ -60,16 +60,16 @@ The key comes from `DEEPSEEK_API_KEY`, or `~/.config/deepseek/key` at mode 600.
 ```sh
 dsx                              # interactive session in the current repo
 dsx -p "run the tests"           # one turn, print, exit
-dsx --model pro --effort max     # pick the weight class at launch
+dsx --effort max                 # turn the reasoning up at launch
 dsx -v                           # full reasoning instead of one folded line
 ```
 
-Launch flags are what turn one command into a set of them — a cheap lane for sweeps and a
-strong one for the hard work:
+Launch flags are what turn one command into a set of them. There is one model now, so
+effort is the lane: a cheap one for sweeps and a deep one for the hard work.
 
 ```sh
-alias dsxf='dsx --model flash'
-alias dsxp='dsx --model pro --effort max'
+alias dsxf='dsx --effort low'
+alias dsxp='dsx --effort max'
 ```
 
 ## MCP servers
@@ -94,13 +94,14 @@ Every session — terminal, web and headless — starts from `~/.dsh/settings.ya
 ```yaml
 agent-default-model:
   provider: deepseek-official
-  model: deepseek-v4-flash
+  model: deepseek-flash
   reasoningEffort: high
 ```
 
 `--model`, `--effort` and `/model` override it per session; this is what they fall back to.
-Set `deepseek-v4-pro` here if the hard work is your normal work, and keep an alias for the
-cheap lane rather than the other way round.
+`deepseek-flash` is V4.1-Flash, the one model the official provider still answers with: the
+V4 ids and the separate vision model route to it, and `deepseek-v4-pro` has done the same
+since 14 September 2026. Effort is the only weight class left to pick.
 
 A self-hosted endpoint is a `provider` here too. There is no per-session provider switch:
 the ACP server does not expose one, so the settings file is where that choice lives.
